@@ -1,0 +1,64 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill in the sections below so we can reproduce and fix it.
+        **Do not include credentials, tokens, or `logindata.json` content in this issue.**
+  - type: input
+    id: version
+    attributes:
+      label: carelink-bridge version
+      description: What version are you running? (tag name or commit SHA)
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: pump
+    attributes:
+      label: Pump model
+      options:
+        - MiniMed 7xxG (e.g. 720G, 740G, 754)
+        - MiniMed 780G
+        - MiniMed Connect
+        - Guardian Connect
+        - Other (please describe in additional context)
+    validations:
+      required: true
+  - type: dropdown
+    id: server
+    attributes:
+      label: CareLink server region
+      options:
+        - EU (default)
+        - US
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, what actually happened? Include relevant log output (redact credentials!).
+      placeholder: |
+        Describe the bug clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Set CARELINK_INTERVAL=...
+        2. Run npm start
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      placeholder: |
+        Anything else worth knowing? Same issue in upstream domien-f/carelink-bridge? Workarounds you found?

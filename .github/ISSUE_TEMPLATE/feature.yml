@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please describe the use case and any proposed implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What's the user need? What pain does this address?
+      placeholder: |
+        Is this specific to Medtronic / Nightscout, or generic to any CareLink bridge?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: How should this work? API shape, config changes, new env var?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve this? Why is this approach better?
+    validations:
+      required: false
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Rough size of the change.
+      options:
+        - Small (< 100 lines, additive only, no new dependencies)
+        - Medium (100-500 lines OR one new dependency)
+        - Large (refactor, new dependency, or breaking change)
+    validations:
+      required: true
+  - type: dropdown
+    id: roadmap
+    attributes:
+      label: Does this fit the roadmap?
+      options:
+        - Not sure — needs maintainer input
+        - Already in ROADMAP.md (link to phase)
+        - Out of current scope — should wait for a future phase
+    validations:
+      required: true
