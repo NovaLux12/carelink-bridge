@@ -1,5 +1,11 @@
 # carelink-bridge
 
+> **Community fork.** This is a community-maintained fork of [domien-f/carelink-bridge](https://github.com/domien-f/carelink-bridge). Original code by [@domien-f](https://github.com/domien-f). Maintained by [NovaLux12](https://github.com/NovaLux12) while upstream is quiet. PRs and issues welcome here.
+>
+> This fork includes the BLE device detection fix from [upstream PR #2](https://github.com/domien-f/carelink-bridge/pull/2) by [@terminalcommand](https://github.com/terminalcommand), which fixes empty-data issues on 780G, Guardian 4, and Simplera CGM devices.
+>
+> See [ROADMAP.md](./ROADMAP.md) for what comes next.
+
 Sends your Medtronic pump and CGM data to [Nightscout](http://www.nightscout.info/) automatically.
 
 It connects to Medtronic's CareLink servers the same way the official CareLink app does, grabs your latest pump and sensor data, and uploads it to your Nightscout site on a regular interval.
