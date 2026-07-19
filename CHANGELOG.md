@@ -12,7 +12,14 @@ record, not reconstructed.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The discovery app-version string (`android/3.6`) is now a documented,
+  named constant in `src/login.ts`. Live probing showed Medtronic's discovery
+  endpoint returns a different config per version — only 3.6/3.7 carry the
+  Auth0 SSO config this flow needs, while 3.4 and 4.0 return no-Auth0 tracks —
+  so a well-meaning "bump to a newer number" would silently break login. The
+  no-SSO-URL error now names the version string as the likely cause.
 
 ## [0.1.5] — 2026-07-19
 
