@@ -92,7 +92,18 @@ All settings go in the `.env` file. Only the first four are required — the res
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_PATIENT` | | Patient username, only needed if your care partner account has multiple patients |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
-| `USE_PROXY` | `false` | **Off by default.** If set to `true`, the bridge will route all CareLink traffic through the proxies listed in `https.txt` (one `ip:port` per line). Only enable this if you specifically need to. The `https.txt` file is gitignored. |
+
+### Proxy / firewall support
+
+If you need to route CareLink traffic through a proxy (corporate firewall, Tor, etc.), set the standard `HTTPS_PROXY` (or `ALL_PROXY`) environment variable. `axios` respects it natively — no bridge-specific config needed. Example:
+
+```bash
+HTTPS_PROXY=http://proxy.example.com:8080 npm start
+# or with authentication
+HTTPS_PROXY=http://user:pass@proxy.example.com:8080 npm start
+```
+
+The bridge doesn't ship any proxy code of its own. Removed in v0.1.2 to shrink the dependency footprint and reduce supply-chain surface area for a medical-data app.
 
 ## For developers
 
