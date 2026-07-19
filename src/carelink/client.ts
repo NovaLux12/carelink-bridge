@@ -152,14 +152,7 @@ export class CareLinkClient {
 
     logger.log('Data retrieval URL:', dataRetrievalUrl);
 
-    // Try multiple API versions
-    const endpoints = [
-      dataRetrievalUrl,
-      dataRetrievalUrl.replace('/v6/', '/v5/'),
-      dataRetrievalUrl.replace('/v6/', '/v11/'),
-      dataRetrievalUrl.replace('/v5/', '/v6/'),
-      dataRetrievalUrl.replace('/v5/', '/v11/'),
-    ];
+    const endpoints = buildEndpointCandidates(dataRetrievalUrl);
 
     const body: Record<string, string> = {
       username: this.options.username,
@@ -304,4 +297,22 @@ function sleep(ms: number): Promise<void> {
 export function isBleDevice(deviceFamily: string | undefined): boolean {
   if (!deviceFamily) return false;
   return deviceFamily.includes('BLE') || deviceFamily.includes('SIMPLERA');
+}
+
+/**
+ * Known API versions of the carepartner data endpoint, tried newest-first
+ * after whatever version the country-settings config hands out. As of
+ * 2026-07 the config returns v6 while the app discovery config advertises
+ * a v13 base URL, so the fallback list spans both directions. Exported at
+ * module level for unit testing.
+ */
+const BLE_API_VERSIONS = [13, 11, 6, 5];
+
+export function buildEndpointCandidates(url: string): string[] {
+  if (!/\/v\d+\//.test(url)) return [url];
+  const candidates = [
+    url,
+    ...BLE_API_VERSIONS.map(v => url.replace(/\/v\d+\//, `/v${v}/`)),
+  ];
+  return [...new Set(candidates)];
 }
