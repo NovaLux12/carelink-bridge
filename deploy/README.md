@@ -124,7 +124,7 @@ The systemd unit ships with defence-in-depth settings:
 | `NoNewPrivileges=true` | The service can't escalate privileges |
 | `PrivateTmp=true` | `/tmp` is private to the service |
 | `ProtectSystem=strict` | The filesystem is read-only except where explicitly allowed |
-| `ProtectHome=read-only` | `~` is read-only; the only writable paths are `logindata.json` and `.env` |
+| `ProtectHome=read-only` | `~` is read-only; the only writable path is the bridge directory itself (needed so token refresh can rewrite — and expiry can delete — `logindata.json`) |
 | `RestrictAddressFamilies=AF_INET AF_INET6` | Only IPv4 + IPv6 sockets — no Unix domain sockets |
 | `SystemCallArchitectures=native` | No `x86_64` emulation if you're on a non-x86 host |
 
@@ -132,7 +132,7 @@ The bridge is a network client, not a server, so `RestrictAddressFamilies` is fi
 
 ## Security considerations
 
-- **`logindata.json` contains OAuth tokens with full CareLink account access.** The systemd unit restricts write access to just that file. Treat it like a password.
+- **`logindata.json` contains OAuth tokens with full CareLink account access.** The systemd unit confines write access to the bridge directory (a per-file grant breaks token-file rotation — see issue #16). Treat it like a password.
 - **`.env` contains your CareLink password AND Nightscout API secret.** Same handling.
 - **The service makes outbound HTTPS to two endpoints**: CareLink (`*.minimed.{eu,com}`) and your Nightscout. There are no inbound network listeners.
 - **The bridge is not FDA-approved** and may violate Medtronic's Terms of Service. Using it is at your own risk. See `SECURITY.md` for the full threat model.
