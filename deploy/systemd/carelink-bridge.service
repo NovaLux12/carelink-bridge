@@ -12,8 +12,11 @@ StartLimitIntervalSec=300
 
 [Service]
 Type=simple
-WorkingDirectory=/home/jack/carelink-bridge
-ExecStart=/usr/bin/node /home/jack/carelink-bridge/dist/main.js
+# %h is the home directory of the user running this --user service, so the
+# unit is portable across machines and accounts (install into
+# ~/carelink-bridge as the deploy README describes) with no editing.
+WorkingDirectory=%h/carelink-bridge
+ExecStart=/usr/bin/node %h/carelink-bridge/dist/main.js
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=15
@@ -22,11 +25,11 @@ TimeoutStopSec=15
 # means missing-file-is-OK at startup, so the unit still loads even
 # before the .env file is created post-deploy. The bridge itself
 # will exit with a clear error if vars are missing at runtime.
-EnvironmentFile=-/home/jack/carelink-bridge/.env
+EnvironmentFile=-%h/carelink-bridge/.env
 
 # Explicit PATH — node lives at /usr/bin/node; node_modules .bin
 # not on PATH for the service user.
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/jack/.npm-global/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.npm-global/bin
 Environment=NODE_ENV=production
 
 # Hardening (defence in depth, even for a personal service):
@@ -39,7 +42,7 @@ ProtectHome=read-only
 # unlinking a per-file ReadWritePaths bind mount fails with EBUSY (which
 # client.ts swallows, so recovery would silently not happen). .env is
 # read-only for the bridge and needs no write grant at all. See issue #16.
-ReadWritePaths=/home/jack/carelink-bridge
+ReadWritePaths=%h/carelink-bridge
 
 # Allow only outbound network (CareLink + Nightscout are HTTPS, so
 # restricting to HTTPS ports keeps the surface tight). CareLink uses

@@ -56,7 +56,7 @@ Re-running the script after a code update is safe: it does `git pull --ff-only`,
 
 ### Configuration (`.env`)
 
-The service loads `/home/jack/carelink-bridge/.env` (via `EnvironmentFile=`). The template is at `deploy/systemd/carelink-bridge.env.example`.
+The service loads `~/carelink-bridge/.env` (via `EnvironmentFile=`; the unit uses systemd's `%h` specifier so it resolves to the home of whichever user runs it). The template is at `deploy/systemd/carelink-bridge.env.example`.
 
 | Variable | Required | Notes |
 |---|---|---|
