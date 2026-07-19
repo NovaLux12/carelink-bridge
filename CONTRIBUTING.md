@@ -30,10 +30,11 @@ Thanks for considering a contribution. This fork exists because the upstream mai
 Version metadata must stay in sync — v0.1.1 through v0.1.3 shipped without bumping `package.json`, which is how [#17](https://github.com/NovaLux12/carelink-bridge/issues/17) happened. For every release:
 
 1. Bump `version` in `package.json` and run `npm install --package-lock-only` to sync the lockfile.
-2. Merge that change via PR like any other.
-3. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-4. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."` with a changelog entry (security-relevant changes get a clear callout per SECURITY.md).
-5. Check ROADMAP.md — a phase marked "shipped" must have a matching tag and release.
+2. Move the `[Unreleased]` items in CHANGELOG.md into a new dated version section and update the compare links at the bottom.
+3. Merge those changes via PR like any other.
+4. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."` — the notes should match the CHANGELOG entry (security-relevant changes get a clear callout per SECURITY.md).
+6. Check ROADMAP.md — a phase marked "shipped" must have a matching tag and release.
 
 ## What we won't accept
 - Closed-loop insulin logic (out of scope; this is a data bridge)
