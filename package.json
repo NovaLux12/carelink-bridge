@@ -1,6 +1,6 @@
 {
   "name": "carelink-bridge",
-  "version": "2.0.0",
+  "version": "0.1.0",
   "description": "Bridge that sends Medtronic CareLink pump and CGM data to Nightscout by simulating the CareLink mobile app's OAuth2 authentication and API calls.",
   "type": "module",
   "main": "dist/index.js",

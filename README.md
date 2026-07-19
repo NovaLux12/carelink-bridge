@@ -106,6 +106,8 @@ npm test          # Run tests
 
 Inspired by [nightscout/minimed-connect-to-nightscout](https://github.com/nightscout/minimed-connect-to-nightscout), the original MiniMed Connect to Nightscout bridge by Mark Wilson and the Nightscout community.
 
+This fork includes a fix from [upstream PR #2](https://github.com/domien-f/carelink-bridge/pull/2) authored by [@terminalcommand](https://github.com/terminalcommand), with co-authorship from Nicolas Raverdy (`@nraverdy`). It resolves empty-data / no-SGV-upload on 780G, Guardian 4, and Simplera CGM devices.
+
 ## Disclaimer
 
 This project is for educational and informational purposes only. It is not FDA approved and should not be used to make medical decisions. It is not affiliated with or endorsed by Medtronic, and may violate their Terms of Service.
