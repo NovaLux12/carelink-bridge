@@ -78,7 +78,7 @@ export class CareLinkClient {
     });
   }
 
-  private async authenticate(): Promise<void> {
+  private async authenticate(forceRefresh = false): Promise<void> {
     let loginData = loadLoginData(this.loginDataPath);
     if (!loginData) {
       throw new Error(
@@ -86,7 +86,7 @@ export class CareLinkClient {
       );
     }
 
-    if (isTokenExpired(loginData.access_token)) {
+    if (forceRefresh || isTokenExpired(loginData.access_token)) {
       try {
         loginData = await refreshToken(loginData);
         saveLoginData(this.loginDataPath, loginData);
@@ -262,10 +262,16 @@ export class CareLinkClient {
     const maxRetry = 3;
     console.log('[Fetch] Starting fetch, max retries:', maxRetry);
 
+    // CareLink can invalidate a token before its exp claim — most commonly
+    // when the CareLink phone app logs into the same account. On 401/403,
+    // force a refresh on the next attempt instead of retrying a dead token.
+    let forceRefresh = false;
+
     for (let i = 1; i <= maxRetry; i++) {
       try {
         this.requestCount = 0;
-        await this.authenticate();
+        await this.authenticate(forceRefresh);
+        forceRefresh = false;
         const data = await this.getConnectData();
         console.log('[Fetch] Success!');
         return data;
@@ -274,6 +280,10 @@ export class CareLinkClient {
         const httpStatus = err.response?.status;
         const errorCode = err.code || err.cause?.code || '';
         console.log(`[Fetch] Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`);
+
+        if (httpStatus === 401 || httpStatus === 403) {
+          forceRefresh = true;
+        }
 
         if (i === maxRetry) throw e;
 
