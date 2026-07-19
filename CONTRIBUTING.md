@@ -7,7 +7,7 @@ Thanks for considering a contribution. This fork exists because the upstream mai
 2. Fork the repo, create a branch.
 3. Make the change.
 4. Make sure `npm test` and `npx tsc --noEmit` pass.
-5. Open a PR against `main`. CI runs on Node 18, 20, 22.
+5. Open a PR against `main`. CI runs on Node 20 and 22.
 6. Wait for review. We'll try to respond within a week.
 
 ## Ground rules
@@ -24,6 +24,16 @@ Thanks for considering a contribution. This fork exists because the upstream mai
 ## Commit messages
 - Imperative mood ("Fix X", not "Fixed X")
 - Reference the upstream PR or issue when applicable
+
+## Releasing (maintainers)
+
+Version metadata must stay in sync — v0.1.1 through v0.1.3 shipped without bumping `package.json`, which is how [#17](https://github.com/NovaLux12/carelink-bridge/issues/17) happened. For every release:
+
+1. Bump `version` in `package.json` and run `npm install --package-lock-only` to sync the lockfile.
+2. Merge that change via PR like any other.
+3. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."` with a changelog entry (security-relevant changes get a clear callout per SECURITY.md).
+5. Check ROADMAP.md — a phase marked "shipped" must have a matching tag and release.
 
 ## What we won't accept
 - Closed-loop insulin logic (out of scope; this is a data bridge)
