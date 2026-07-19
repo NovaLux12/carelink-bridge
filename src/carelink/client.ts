@@ -102,14 +102,27 @@ export class CareLinkClient {
     console.log('[Token] Using token-based auth from logindata.json');
   }
 
-  private async getCurrentRole(): Promise<string> {
-    const resp = await this.axiosInstance.get<CareLinkUserInfo>(this.urls.me);
-    return resp.data?.role?.toUpperCase() ?? '';
+  // The username CareLink knows the account by. CARELINK_USERNAME in .env
+  // may be an email while the actual CareLink username differs, and the
+  // data endpoints expect the latter — so prefer what /users/me reports
+  // (the same source nightscout-connect and carelink-python-client use).
+  private currentUser?: CareLinkUserInfo;
+
+  private accountUsername(): string {
+    return this.currentUser?.username || this.options.username;
   }
 
   private async getConnectData(): Promise<CareLinkData> {
-    const role = await this.getCurrentRole();
+    const resp = await this.axiosInstance.get<CareLinkUserInfo>(this.urls.me);
+    this.currentUser = resp.data;
+    const role = resp.data?.role?.toUpperCase() ?? '';
     logger.log('getConnectData - currentRole:', role);
+    if (this.currentUser?.username && this.currentUser.username !== this.options.username) {
+      logger.log(
+        'CareLink reports username "' + this.currentUser.username +
+        '" (differs from CARELINK_USERNAME) — using the server-reported one',
+      );
+    }
 
     if (role === 'CARE_PARTNER_OUS' || role === 'CARE_PARTNER') {
       return this.fetchAsCarepartner(role);
@@ -155,7 +168,7 @@ export class CareLinkClient {
     const endpoints = buildEndpointCandidates(dataRetrievalUrl);
 
     const body: Record<string, string> = {
-      username: this.options.username,
+      username: this.accountUsername(),
       role: 'carepartner',
       patientId,
     };
@@ -198,7 +211,7 @@ export class CareLinkClient {
     }
 
     const body: Record<string, string> = {
-      username: this.options.username,
+      username: this.accountUsername(),
       role,
     };
 
@@ -228,7 +241,7 @@ export class CareLinkClient {
 
       if (resp.data && this.isBleDevice(resp.data.deviceFamily || resp.data.medicalDeviceFamily)) {
         logger.log('BLE device detected, using BLE endpoint');
-        return this.fetchBleDeviceData(this.options.username);
+        return this.fetchBleDeviceData(this.accountUsername());
       }
 
       if (resp.status === 200 && resp.data && Object.keys(resp.data).length > 1) {
