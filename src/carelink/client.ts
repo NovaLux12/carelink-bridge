@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
 import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './token.js';
-import { loadProxyList, createProxyAgent, ProxyRotator } from './proxy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
 
@@ -27,7 +26,6 @@ export interface CareLinkClientOptions {
 
 export class CareLinkClient {
   private axiosInstance: AxiosInstance;
-  private proxyRotator: ProxyRotator;
   private urls: CareLinkUrls;
   private loginDataPath: string;
   private serverName: string;
@@ -46,14 +44,6 @@ export class CareLinkClient {
     );
     this.urls = buildUrls(this.serverName, countryCode, lang);
     this.loginDataPath = path.join(__dirname, '..', '..', 'logindata.json');
-
-    // Load proxy list — opt-in. Default is OFF: a fresh install has no https.txt
-    // so no proxies are loaded, but we don't silently flip the default ON if a
-    // malicious or accidental https.txt appears. Set USE_PROXY=true to enable.
-    const useProxy = (process.env['USE_PROXY'] || 'false').toLowerCase() === 'true';
-    const proxyFile = path.join(__dirname, '..', '..', 'https.txt');
-    const proxies = useProxy ? loadProxyList(proxyFile) : [];
-    this.proxyRotator = new ProxyRotator(proxies);
 
     // Set up axios
     this.axiosInstance = axios.create({
@@ -86,25 +76,6 @@ export class CareLinkClient {
       config.headers['Connection'] = 'keep-alive';
       return config;
     });
-
-    // Apply first proxy
-    if (this.proxyRotator.hasProxies) {
-      this.applyProxy(this.proxyRotator.getNext());
-    }
-  }
-
-  private applyProxy(proxy: { ip: string; port: string; username?: string; password?: string; protocols: string[] } | null): void {
-    if (proxy) {
-      const agent = createProxyAgent(proxy);
-      if (agent) {
-        this.axiosInstance.defaults.httpsAgent = agent;
-        this.axiosInstance.defaults.httpAgent = agent;
-        console.log(`[Proxy] Using proxy: ${proxy.ip}:${proxy.port}${proxy.username ? ' (authenticated)' : ''}`);
-      }
-    } else {
-      this.axiosInstance.defaults.httpsAgent = undefined;
-      this.axiosInstance.defaults.httpAgent = undefined;
-    }
   }
 
   private async authenticate(): Promise<void> {
@@ -284,9 +255,11 @@ export class CareLinkClient {
 
   async fetch(): Promise<CareLinkData> {
     this.requestCount = 0;
-    this.proxyRotator.resetRetries();
 
-    const maxRetry = this.proxyRotator.hasProxies ? 10 : 1;
+    // Up to 3 retries with exponential backoff (2s, 4s, 8s). If you need
+    // outbound proxying, set HTTPS_PROXY (or ALL_PROXY) — axios respects
+    // those natively, no fork-specific config required.
+    const maxRetry = 3;
     console.log('[Fetch] Starting fetch, max retries:', maxRetry);
 
     for (let i = 1; i <= maxRetry; i++) {
@@ -300,19 +273,7 @@ export class CareLinkClient {
         const err = e as { response?: { status: number }; code?: string; cause?: { code?: string }; message?: string };
         const httpStatus = err.response?.status;
         const errorCode = err.code || err.cause?.code || '';
-        const isProxyError = [400, 403, 407, 502, 503].includes(httpStatus ?? 0);
-        const isNetworkError = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EPROTO', 'ERR_SOCKET_BAD_PORT'].includes(errorCode);
-
         console.log(`[Fetch] Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`);
-
-        if ((isProxyError || isNetworkError) && this.proxyRotator.hasProxies) {
-          console.log('[Fetch] Trying next proxy...');
-          const nextProxy = this.proxyRotator.tryNext();
-          if (!nextProxy) throw e;
-          this.applyProxy(nextProxy);
-          await sleep(1000);
-          continue;
-        }
 
         if (i === maxRetry) throw e;
 
