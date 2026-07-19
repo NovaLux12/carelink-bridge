@@ -117,6 +117,16 @@ npm run build     # Compile TypeScript
 npm test          # Run tests
 ```
 
+## Deployment
+
+A full deployment runbook for running this as a long-lived service on a Linux host is in [`deploy/README.md`](./deploy/README.md). It includes:
+
+- A hardened user-level systemd unit (`deploy/systemd/carelink-bridge.service`)
+- An idempotent install script (`deploy/install.sh`)
+- A Nightscout + cloudflared docker-compose stack (`deploy/nightscout-docker-compose.yml`) for getting Nightscout + a public URL up alongside the bridge
+
+Tested against Node 20+ on Ubuntu 26.04 LTS.
+
 ## Acknowledgements
 
 Inspired by [nightscout/minimed-connect-to-nightscout](https://github.com/nightscout/minimed-connect-to-nightscout), the original MiniMed Connect to Nightscout bridge by Mark Wilson and the Nightscout community.

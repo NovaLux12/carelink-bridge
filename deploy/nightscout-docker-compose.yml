@@ -1,0 +1,94 @@
+# Nightscout stack for carelink-bridge
+#
+# This docker-compose runs Nightscout + MongoDB + Cloudflare tunnel
+# (cloudflared) on the same host as carelink-bridge. Designed for
+# personal use — no multi-user, no scaling, no production hardening.
+#
+# Architecture:
+#
+#   [carelink-bridge] --HTTPS--> [nightscout:1337]  (in this compose)
+#                                            |
+#                                            v
+#                                       [mongo:27017] (in this compose)
+#                                            ^
+#                                            |
+#   [phone browser]    <--HTTPS-- [cloudflared] <--+
+#                              (tunnel to your domain)
+#
+# Prerequisites:
+#   - Docker + docker compose (already on lee-lab)
+#   - A Cloudflare account with a domain managed there
+#   - A tunnel created via `cloudflared tunnel login` + `cloudflared tunnel create ns`
+#   - The tunnel credentials file at ./cloudflared/credentials.json
+#   - A DNS route: `cloudflared tunnel route dns ns nightscout.example.com`
+#
+# First-time setup (run once on the host):
+#
+#   1. mkdir -p ~/nightscout-deploy/cloudflared
+#   2. docker run -it --rm -v ~/nightscout-deploy/cloudflared:/home/nonroot/.cloudflared cloudflare/cloudflared:latest tunnel login
+#      (follow the browser auth flow)
+#   3. docker run -it --rm -v ~/nightscout-deploy/cloudflared:/home/nonroot/.cloudflared cloudflare/cloudflared:latest tunnel create ns
+#      (this creates credentials.json + UUID for the tunnel)
+#   4. docker run -it --rm -v ~/nightscout-deploy/cloudflared:/home/nonroot/.cloudflared cloudflare/cloudflared:latest tunnel route dns ns nightscout.example.com
+#      (creates the CNAME to point nightscout.example.com at the tunnel)
+#   5. Create ~/nightscout-deploy/cloudflared/config.yml (see below).
+#
+# After setup, `docker compose up -d` and you're live.
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: nightscout-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    # No exposed ports — Nightscout talks to it over the docker network only.
+
+  nightscout:
+    # The official Nightscout image. API_SECRET must match what you put
+    # in carelink-bridge's .env as API_SECRET (the bridge SHA-1 hashes
+    # it before sending; Nightscout hashes its own env value at startup,
+    # so the two hashed values must match — which means the plaintext
+    # values must match).
+    image: nightscout/cgm-remote-monitor:latest
+    container_name: nightscout
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      # Required
+      - MONGO_CONNECTION=mongodb://mongo:27017/nightscout
+      - API_SECRET=${NS_API_SECRET:?set NS_API_SECRET in .env}
+      - HOSTNAME=https://${NS_DOMAIN:?set NS_DOMAIN in .env}
+      # Recommended
+      - TZ=${TZ:-Europe/London}
+      - DISPLAY_UNITS=mg/dl
+      - TIME_FORMAT=24
+      - SHOW_RAWBG=never
+      - DEVICESTATUS_ADVANCED=true
+      - ENABLE=careportal basal bwp cage iob pump basal
+    # No exposed ports — cloudflared talks to it over the docker network.
+
+  cloudflared:
+    # Cloudflare's tunnel client. Listens on no host port; tunnels to
+    # Cloudflare's edge via outbound HTTPS only. The credentials file
+    # is created by `cloudflared tunnel create ns` (see above).
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    volumes:
+      - ./cloudflared:/home/nonroot/.cloudflared:ro
+    depends_on:
+      - nightscout
+
+volumes:
+  mongo-data:
+    # Docker-managed named volume. Survives container restarts.
+    # Backup with `docker run --rm -v nightscout-deploy_mongo-data:/data -v $(pwd):/backup alpine tar czf /backup/mongo-$(date +%F).tar.gz /data`
