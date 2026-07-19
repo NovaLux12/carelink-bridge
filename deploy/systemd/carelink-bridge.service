@@ -34,7 +34,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/jack/carelink-bridge/logindata.json /home/jack/carelink-bridge/.env
+# Directory-level grant, not per-file: the bridge rewrites logindata.json
+# on token refresh and unlinks it when the refresh token is dead, and
+# unlinking a per-file ReadWritePaths bind mount fails with EBUSY (which
+# client.ts swallows, so recovery would silently not happen). .env is
+# read-only for the bridge and needs no write grant at all. See issue #16.
+ReadWritePaths=/home/jack/carelink-bridge
 
 # Allow only outbound network (CareLink + Nightscout are HTTPS, so
 # restricting to HTTPS ports keeps the surface tight). CareLink uses
