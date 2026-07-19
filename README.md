@@ -12,7 +12,7 @@ It connects to Medtronic's CareLink servers the same way the official CareLink a
 
 ## What you need
 
-- [Node.js](https://nodejs.org) version 18 or newer (download and install it if you don't have it)
+- [Node.js](https://nodejs.org) version 20 or newer (download and install it if you don't have it)
 - A [CareLink](https://carelink.minimed.com/) account with a connected pump (MiniMed 7xxG, MiniMed Connect, or Guardian Connect)
 - A working [Nightscout](http://www.nightscout.info/) site
 
