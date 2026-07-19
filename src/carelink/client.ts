@@ -215,8 +215,7 @@ export class CareLinkClient {
   }
 
   private isBleDevice(deviceFamily: string | undefined): boolean {
-    if (!deviceFamily) return false;
-    return deviceFamily.includes('BLE') || deviceFamily.includes('SIMPLERA');
+    return isBleDevice(deviceFamily);
   }
 
   private async fetchBleDeviceData(patientId?: string, role: string = 'patient'): Promise<CareLinkData> {
@@ -328,4 +327,20 @@ export class CareLinkClient {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Determines whether a CareLink device family string indicates a BLE device
+ * (780G, Guardian 4, Simplera, etc.). Exported at module level so the
+ * helper can be unit-tested without spinning up a CareLinkClient.
+ *
+ * The patient `monitor/data` endpoint returns the family under `deviceFamily`,
+ * while older endpoints use `medicalDeviceFamily`. The fix from upstream
+ * PR #2 (https://github.com/domien-f/carelink-bridge/pull/2) made the call
+ * sites pass `deviceFamily || medicalDeviceFamily` so BLE detection works
+ * for both shapes.
+ */
+export function isBleDevice(deviceFamily: string | undefined): boolean {
+  if (!deviceFamily) return false;
+  return deviceFamily.includes('BLE') || deviceFamily.includes('SIMPLERA');
 }
