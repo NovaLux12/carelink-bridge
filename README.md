@@ -92,6 +92,7 @@ All settings go in the `.env` file. Only the first four are required — the res
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_PATIENT` | | Patient username, only needed if your care partner account has multiple patients |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
+| `USE_PROXY` | `false` | **Off by default.** If set to `true`, the bridge will route all CareLink traffic through the proxies listed in `https.txt` (one `ip:port` per line). Only enable this if you specifically need to. The `https.txt` file is gitignored. |
 
 ## For developers
 

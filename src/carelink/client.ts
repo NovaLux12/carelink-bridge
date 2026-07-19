@@ -47,8 +47,10 @@ export class CareLinkClient {
     this.urls = buildUrls(this.serverName, countryCode, lang);
     this.loginDataPath = path.join(__dirname, '..', '..', 'logindata.json');
 
-    // Load proxy list
-    const useProxy = (process.env['USE_PROXY'] || 'true').toLowerCase() !== 'false';
+    // Load proxy list — opt-in. Default is OFF: a fresh install has no https.txt
+    // so no proxies are loaded, but we don't silently flip the default ON if a
+    // malicious or accidental https.txt appears. Set USE_PROXY=true to enable.
+    const useProxy = (process.env['USE_PROXY'] || 'false').toLowerCase() === 'true';
     const proxyFile = path.join(__dirname, '..', '..', 'https.txt');
     const proxies = useProxy ? loadProxyList(proxyFile) : [];
     this.proxyRotator = new ProxyRotator(proxies);

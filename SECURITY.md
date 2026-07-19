@@ -4,9 +4,7 @@
 
 Open a private security advisory: <https://github.com/NovaLux12/carelink-bridge/security/advisories/new>
 
-Or email: NovaLux12@users.noreply.github.com (PGP key on request)
-
-Please **do not** open a public issue for security vulnerabilities.
+Please **do not** open a public issue for security vulnerabilities. GitHub Security Advisories are the only channel that guarantees a private, tracked response for this repo.
 
 ## Threat model
 

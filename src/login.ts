@@ -504,7 +504,6 @@ const isMainModule = process.argv[1] &&
 
 if (isMainModule) {
   const dotenv = await import('dotenv');
-  dotenv.config({ path: path.join(__dirname, '..', 'my.env') });
   dotenv.config();
 
   const isUS = (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';

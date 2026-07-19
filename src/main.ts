@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load environment variables
-dotenv.config({ path: path.join(__dirname, '..', 'my.env') });
 dotenv.config();
 
 import { loadConfig } from './config.js';
