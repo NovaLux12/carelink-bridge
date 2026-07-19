@@ -10,6 +10,7 @@
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "login": "tsx src/login.ts",
+    "doctor": "tsx src/doctor.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""

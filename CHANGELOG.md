@@ -12,6 +12,15 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Added
+
+- `npm run doctor` — a pre-flight self-check that validates `.env`
+  completeness, decodes and reports the login token's validity/expiry,
+  and confirms CareLink and Nightscout are reachable with an accepted
+  `API_SECRET`, without fetching pump data. One request each to two hosts,
+  safe to run repeatedly. Exit code is non-zero on failure so it can gate a
+  deploy. First item of the v0.2.0 operability set ([#8]).
+
 ### Changed
 
 - The discovery app-version string (`android/3.6`) is now a documented,
@@ -167,6 +176,7 @@ Carried in this repository's git history from
 [0.1.0]: https://github.com/NovaLux12/carelink-bridge/releases/tag/v0.1.0
 [#4]: https://github.com/NovaLux12/carelink-bridge/pull/4
 [#6]: https://github.com/NovaLux12/carelink-bridge/pull/6
+[#8]: https://github.com/NovaLux12/carelink-bridge/issues/8
 [#15]: https://github.com/NovaLux12/carelink-bridge/issues/15
 [#16]: https://github.com/NovaLux12/carelink-bridge/issues/16
 [#17]: https://github.com/NovaLux12/carelink-bridge/issues/17

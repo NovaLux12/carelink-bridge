@@ -66,7 +66,18 @@ This will try to log in automatically. If CareLink asks for a CAPTCHA, a browser
 
 You only need to do this once. Your login tokens are saved in a file called `logindata.json`.
 
-### 4. Start the bridge
+### 4. Check everything is ready (optional but recommended)
+
+```
+npm run doctor
+```
+
+This runs a quick pre-flight check: your `.env` settings are complete, your
+login token is valid, and CareLink and Nightscout are both reachable (and your
+`API_SECRET` is accepted). It doesn't fetch any pump data — safe to run anytime,
+especially the first time you connect a new pump.
+
+### 5. Start the bridge
 
 ```
 npm start
@@ -75,6 +86,8 @@ npm start
 That's it! The bridge will fetch your data every 5 minutes and upload it to Nightscout. Leave it running in the background.
 
 ## Troubleshooting
+
+Start with `npm run doctor` — it pinpoints most setup problems (missing settings, expired login, unreachable CareLink/Nightscout, wrong API secret) in one command.
 
 - **"No logindata.json found"** — Run `npm run login` first.
 - **Login expired** — Delete the `logindata.json` file and run `npm run login` again.
