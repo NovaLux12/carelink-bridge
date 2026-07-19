@@ -64,14 +64,14 @@ describe('BLE body username source', () => {
   });
 
   it('should use the /users/me username in the BLE POST, not the env value', async () => {
-    const client = new CareLinkClient({ username: 'jack@example.com', password: 'p' });
+    const client = new CareLinkClient({ username: 'you@example.com', password: 'p' });
     const data = await client.fetch();
 
     expect(data).toEqual(bleData);
     expect(axiosInstance.post).toHaveBeenCalledTimes(1);
     const [, body] = axiosInstance.post.mock.calls[0];
     expect(body.username).toBe('real-username');
-    expect(body.username).not.toBe('jack@example.com');
+    expect(body.username).not.toBe('you@example.com');
   });
 
   it('should fall back to the configured username if /users/me omits one', async () => {

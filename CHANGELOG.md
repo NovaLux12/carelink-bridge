@@ -12,7 +12,13 @@ record, not reconstructed.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The systemd unit now uses systemd's `%h` specifier instead of a hardcoded
+  home-directory path, so it is portable across machines and accounts with no
+  editing — install into `~/carelink-bridge` and it resolves to the running
+  user's home. (This also removes the maintainer's own paths from the shipped
+  artifacts.)
 
 ## [0.1.6] — 2026-07-19
 

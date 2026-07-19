@@ -16,7 +16,7 @@
 #                              (tunnel to your domain)
 #
 # Prerequisites:
-#   - Docker + docker compose (already on lee-lab)
+#   - Docker + docker compose (on your Docker host)
 #   - A Cloudflare account with a domain managed there
 #   - A tunnel created via `cloudflared tunnel login` + `cloudflared tunnel create ns`
 #   - The tunnel credentials file at ./cloudflared/credentials.json

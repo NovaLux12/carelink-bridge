@@ -39,11 +39,11 @@ describe('checkLoginData()', () => {
   });
 
   it('reports a valid token with time remaining and identity', () => {
-    const login = { access_token: tokenWithExp(NOW / 1000 + 3600, { preferred_username: 'jack', country: 'GB' }) } as LoginData;
+    const login = { access_token: tokenWithExp(NOW / 1000 + 3600, { preferred_username: 'demo-user', country: 'GB' }) } as LoginData;
     const r = checkLoginData(login, NOW);
     expect(r.status).toBe('ok');
     expect(r.detail).toContain('60 min');
-    expect(r.detail).toContain('jack');
+    expect(r.detail).toContain('demo-user');
     expect(r.detail).toContain('GB');
   });
 
