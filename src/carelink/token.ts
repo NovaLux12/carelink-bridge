@@ -35,8 +35,10 @@ export function isTokenExpired(accessToken: string): boolean {
     const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
     if (!payload.exp) return true;
 
-    // Expired if less than 1 minute remaining
-    return payload.exp * 1000 < Date.now() + 60 * 1000;
+    // Expired if less than 10 minutes remaining — wide enough that a token
+    // passing this check can't expire mid-fetch (matches the margin used by
+    // carelink-python-client's reference implementation).
+    return payload.exp * 1000 < Date.now() + 600 * 1000;
   } catch (e) {
     console.log('[Token] Failed to decode JWT:', (e as Error).message);
     return true;
