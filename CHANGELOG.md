@@ -12,6 +12,10 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.6] — 2026-07-19
+
 ### Added
 
 - `npm run doctor` — a pre-flight self-check that validates `.env`
@@ -19,7 +23,7 @@ record, not reconstructed.
   and confirms CareLink and Nightscout are reachable with an accepted
   `API_SECRET`, without fetching pump data. One request each to two hosts,
   safe to run repeatedly. Exit code is non-zero on failure so it can gate a
-  deploy. First item of the v0.2.0 operability set ([#8]).
+  deploy. First item of the v0.2.0 operability set ([#8]). ([#28])
 
 ### Changed
 
@@ -28,7 +32,7 @@ record, not reconstructed.
   endpoint returns a different config per version — only 3.6/3.7 carry the
   Auth0 SSO config this flow needs, while 3.4 and 4.0 return no-Auth0 tracks —
   so a well-meaning "bump to a newer number" would silently break login. The
-  no-SSO-URL error now names the version string as the likely cause.
+  no-SSO-URL error now names the version string as the likely cause. ([#27])
 
 ## [0.1.5] — 2026-07-19
 
@@ -167,7 +171,8 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.2...v0.1.3
@@ -187,6 +192,8 @@ Carried in this repository's git history from
 [#22]: https://github.com/NovaLux12/carelink-bridge/pull/22
 [#23]: https://github.com/NovaLux12/carelink-bridge/pull/23
 [#25]: https://github.com/NovaLux12/carelink-bridge/pull/25
+[#27]: https://github.com/NovaLux12/carelink-bridge/pull/27
+[#28]: https://github.com/NovaLux12/carelink-bridge/pull/28
 [#12 round-1 comment]: https://github.com/NovaLux12/carelink-bridge/issues/12#issuecomment-5016844704
 [#12 round-2 comment]: https://github.com/NovaLux12/carelink-bridge/issues/12#issuecomment-5016878393
 [upstream PR #2]: https://github.com/domien-f/carelink-bridge/pull/2
