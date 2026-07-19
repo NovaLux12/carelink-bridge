@@ -27,22 +27,29 @@ export function saveLoginData(filePath: string, data: LoginData): void {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 4));
 }
 
-export function isTokenExpired(accessToken: string): boolean {
+/**
+ * Decodes the payload (claims) of a JWT access token without verifying its
+ * signature — we only read claims we already trust the server for (exp,
+ * token_details). Returns null for a malformed token.
+ */
+export function decodeTokenPayload(accessToken: string): Record<string, unknown> | null {
   try {
     const parts = accessToken.split('.');
-    if (parts.length !== 3) return true;
-
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-    if (!payload.exp) return true;
-
-    // Expired if less than 10 minutes remaining — wide enough that a token
-    // passing this check can't expire mid-fetch (matches the margin used by
-    // carelink-python-client's reference implementation).
-    return payload.exp * 1000 < Date.now() + 600 * 1000;
-  } catch (e) {
-    console.log('[Token] Failed to decode JWT:', (e as Error).message);
-    return true;
+    if (parts.length !== 3) return null;
+    return JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+  } catch {
+    return null;
   }
+}
+
+export function isTokenExpired(accessToken: string): boolean {
+  const payload = decodeTokenPayload(accessToken);
+  if (!payload || typeof payload.exp !== 'number') return true;
+
+  // Expired if less than 10 minutes remaining — wide enough that a token
+  // passing this check can't expire mid-fetch (matches the margin used by
+  // carelink-python-client's reference implementation).
+  return payload.exp * 1000 < Date.now() + 600 * 1000;
 }
 
 export async function refreshToken(loginData: LoginData): Promise<LoginData> {

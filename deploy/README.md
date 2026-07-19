@@ -82,6 +82,10 @@ CareLink uses OAuth2 with a browser-based flow for the initial login. The bridge
 
 Run `npm run login` from the deploy directory. On success, `logindata.json` (gitignored) is written and the service can start. **The OAuth tokens in `logindata.json` are good for ~30 days; the bridge will refresh them automatically using the refresh token. If the refresh token also expires, you need to re-run `npm run login`.**
 
+### Pre-flight check (`npm run doctor`)
+
+Before `systemctl --user start`, run `npm run doctor` from the deploy directory. It confirms `.env` is complete, the login token is valid, and both CareLink and Nightscout are reachable with the right API secret — without fetching pump data. Especially worth running the first time a new pump is paired; it turns "why is no data showing up" into a specific, named failure. Exit code is non-zero if any check fails, so it can gate an automated deploy.
+
 ### Start the service
 
 ```bash
