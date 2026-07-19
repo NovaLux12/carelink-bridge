@@ -1,5 +1,9 @@
 # carelink-bridge
 
+[![CI](https://github.com/NovaLux12/carelink-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/NovaLux12/carelink-bridge/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/NovaLux12/carelink-bridge)](https://github.com/NovaLux12/carelink-bridge/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > **Community fork.** This is a community-maintained fork of [domien-f/carelink-bridge](https://github.com/domien-f/carelink-bridge). Original code by [@domien-f](https://github.com/domien-f). Maintained by [NovaLux12](https://github.com/NovaLux12) while upstream is quiet. PRs and issues welcome here.
 >
 > This fork includes the BLE device detection fix from [upstream PR #2](https://github.com/domien-f/carelink-bridge/pull/2) by [@terminalcommand](https://github.com/terminalcommand), which fixes empty-data issues on 780G, Guardian 4, and Simplera CGM devices.
