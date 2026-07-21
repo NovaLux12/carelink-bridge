@@ -28,7 +28,7 @@ This fork has a phased plan. Each phase is opt-in — don't ship phase N+1 until
 - [x] `deploy/README.md` — full deployment runbook
 - [x] `deploy/nightscout-docker-compose.yml` — Nightscout + mongo + cloudflared stack (deployment requires Cloudflare tunnel credentials from operator)
 
-**Why v0.1.3 jumped the queue:** the operator's 780G pump arrives within ~2 weeks. Deployment prep needs to happen before pump arrival so the bridge can be live within an hour of first data. Real-data validation against the live CareLink account is still pending; nothing in v0.1.3 changes runtime behaviour.
+**Why v0.1.3 jumped the queue:** the operator's 780G pump is now expected in November 2026. Deployment prep was shipped early so the bridge can be live within an hour of first data once the pump arrives. Real-data validation against the live CareLink account is still pending; nothing in v0.1.3 changes runtime behaviour.
 
 ## v0.2.0 — operability (proposed, blocked on real-data validation)
 - [ ] `carelink-bridge doctor` — config + connectivity check (env vars, CareLink reachable, Nightscout reachable, `logindata.json` valid)
