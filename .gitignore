@@ -3,4 +3,22 @@ dist/
 logindata.json
 *.env
 .idea/
+# research/ holds the Medtronic CareLink investigation notes that inform
+# this fork's behaviour. They are not part of the published repo - the
+# maintainer keeps them locally for cross-referencing. Anyone running
+# `git add -A` will not stage them, and the directory will not appear in
+# `git status` for any contributor who clones the repo.
+research/
+
+# macOS Finder artifacts (also created by some Linux/Windows tools when
+# editing files on a shared filesystem). Not source.
+.DS_Store
+._*
+# Agent / assistant instruction files. Same exclusion logic as research/ -
+# the maintainer may keep them locally for any agent tooling, but they
+# are not part of the published repo. Add the explicit filename and
+# uppercase variant so the rule is unambiguous whichever case a tool
+# uses. Directory form catches future variants.
+AGENTS.md
+CLAUDE.md
 .claude/
