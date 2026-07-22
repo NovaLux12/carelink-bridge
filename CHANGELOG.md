@@ -10,60 +10,6 @@ Entries before v0.1.0 describe the upstream history this fork carries.
 Written retroactively on 2026-07-19; dates are taken from the git/tag/release
 record, not reconstructed.
 
-## [0.2.1] — 2026-07-22
-
-### Documentation
-
-- **Full docs restructure.** The previous README mixed the noob
-  walkthrough, settings, developer entry points, deployment, and
-  contributor rules in one stream. A new contributor couldn't
-  navigate past "what is a terminal" to find the architecture.
-  Split into audience-targeted files:
-  - `README.md` — slim landing page, "what do you want to do?"
-    router to each audience.
-  - `USER-GUIDE.md` — true beginner guide: "is this for me?",
-    glossary, Node install per OS with expected output, .env
-    walkthrough, three login strategies, troubleshooting, service-
-    mode options.
-  - `docs/ARCHITECTURE.md` — system overview, data-flow diagrams,
-    module map, OAuth deep-dive (three strategies + the
-    `android/3.6` discovery pin), data model (mmol/L conversion,
-    trend mapping, pump-offset quarter-hour rounding, last-alarm
-    policy), error and retry semantics, token storage, test
-    architecture, contributor "how to add a feature" flow.
-  - `docs/adr/` — eight Michael-Nygard-format ADRs covering retry
-    policy (0001), discovery pin (0002), atomic token write
-    (0003), no proxy code (0004), dependency minimalism (0005), no
-    `npm audit` in CI (0006), Node 20+ only (0007), branch
-    protection with `enforce_admins` (0008). Each records the
-    decision, the rationale, and what would justify reversing it.
-  - `CONTRIBUTING.md` — workflow + ground rules with cross-links
-    to ARCHITECTURE and the ADRs. "No architectural decision
-    without an ADR" rule is now explicit.
-  - `ROADMAP.md` — phased plan with "why this exists / what
-    unblocks it" rationale per phase. v0.1.0–v0.2.0 entries get
-    per-phase "why" sections; v0.3.0+ blocks are explicit about
-    what unblocks them.
-  - `SECURITY.md` — threat model + reporting + cross-links to
-    security-relevant ADRs. The durable-decision blocks that
-    previously duplicated ADR content are removed; the ADRs are
-    the canonical record.
-
-### Changed
-
-- **`.gitignore`** now excludes `research/`, `.DS_Store`, `._*`,
-  `AGENTS.md`, and `CLAUDE.md`. The "do not push the research
-  folder" rule is enforced by git, not memory. The agent-
-  filename patterns are added pre-emptively so a future
-  contributor dropping one in won't accidentally publish it.
-
-### Notes
-
-- Final housekeeping release before the maintainer's 780G pump
-  arrives (currently expected November 2026). No code changes;
-  no behaviour change. Test suite unchanged: 135 tests pass on
-  Node 20 and 22.
-
 ## [0.2.0] — 2026-07-22
 
 ### Added
