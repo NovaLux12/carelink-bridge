@@ -10,7 +10,7 @@ Entries before v0.1.0 describe the upstream history this fork carries.
 Written retroactively on 2026-07-19; dates are taken from the git/tag/release
 record, not reconstructed.
 
-## [Unreleased]
+## [0.2.0] — 2026-07-22
 
 ### Added
 
