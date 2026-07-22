@@ -13,3 +13,18 @@ updates:
     # Major version bumps need security review before merge.
     # See SECURITY.md for the policy.
     # We do NOT auto-merge Dependabot PRs.
+    # Bundle routine minor/patch bumps into a single PR; majors stay
+    # individual so each one can be reviewed against the policy above.
+    groups:
+      minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
