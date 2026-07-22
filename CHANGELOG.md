@@ -288,7 +288,9 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.3...v0.1.4
