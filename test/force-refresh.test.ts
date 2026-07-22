@@ -168,4 +168,80 @@ describe('CareLinkClient.fetch() on 401 (#21)', () => {
     // stayed set because authenticate returned true).
     expect(refreshToken).toHaveBeenCalledTimes(2);
   });
+
+  it('honours a Retry-After header on HTTP 429 (pinning the server-set delay)', async () => {
+    // Integration test for the status-aware retry policy's headline
+    // feature: 429 + Retry-After. The pre-fix code used fixed 2s/4s/8s
+    // sleeps regardless of what the server asked for. This test pins
+    // the delay by:
+    //   1. Asking the server for 25s via Retry-After (deliberately not
+    //      a multiple of 2, 4, or 8 — so a fixed-backoff retry would
+    //      happen at the wrong time).
+    //   2. Advancing 10s and asserting the retry has NOT fired.
+    //   3. Advancing the remaining 20s and asserting the retry fired.
+    const retryAfterSeconds = 25;
+    let meCalls = 0;
+    axiosInstance.get.mockImplementation(async (url: string) => {
+      if (url.includes('/users/me')) {
+        meCalls++;
+        if (meCalls === 1) {
+          // Realistic AxiosError shape: code + response with status + headers.
+          throw {
+            code: 'ERR_BAD_REQUEST',
+            response: {
+              status: 429,
+              headers: { 'retry-after': String(retryAfterSeconds) },
+            },
+          };
+        }
+        return { status: 200, data: { role: 'PATIENT' } };
+      }
+      if (url.includes('/monitor/data')) {
+        return { status: 200, data: monitorData };
+      }
+      throw new Error('unexpected url: ' + url);
+    });
+
+    const client = new CareLinkClient({ username: 'u', password: 'p' });
+    const fetchPromise = client.fetch();
+    fetchPromise.catch(() => {}); // suppress unhandled rejection
+
+    // After the 429, decideRetry sets a 25s sleep. Advance 10s — well
+    // past the fixed-2s/4s/8s window — and the retry must NOT have
+    // fired. A pre-fix path would have retried at ~2s.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(meCalls).toBe(1);
+
+    // Advance through the full 25s; the retry should now have run.
+    await vi.advanceTimersByTimeAsync(20_000);
+    const data = await fetchPromise;
+    expect(data).toEqual(monitorData);
+    expect(meCalls).toBe(2);
+  });
+
+  it('fails fast on HTTP 404 without retrying', async () => {
+    // Integration test for permanent-4xx fail-fast. Pre-fix the loop
+    // would hammer the host three times before giving up; the new
+    // policy throws on the first attempt because 404 is permanent.
+    let meCalls = 0;
+    axiosInstance.get.mockImplementation(async (url: string) => {
+      if (url.includes('/users/me')) {
+        meCalls++;
+        throw {
+          code: 'ERR_BAD_REQUEST',
+          response: { status: 404, headers: {} },
+        };
+      }
+      throw new Error('unexpected url: ' + url);
+    });
+
+    const client = new CareLinkClient({ username: 'u', password: 'p' });
+    await expect(client.fetch()).rejects.toMatchObject({
+      response: { status: 404 },
+    });
+
+    // Exactly ONE call to /users/me — the loop must NOT retry on a
+    // permanent 4xx. The pre-fix code would have made three calls.
+    expect(meCalls).toBe(1);
+  });
 });

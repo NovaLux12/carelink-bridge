@@ -12,6 +12,89 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Added
+
+- **Atomic 0600 `logindata.json` write** — `writeLoginDataAtomic` in
+  `src/carelink/token.ts` opens the temp file with `O_CREAT|O_EXCL|O_WRONLY`
+  and `mode(0o600)`, fsyncs, then renames atomically. Closes the
+  world-readable window between temp create and chmod that umask-022
+  boxes had. `tightenLoginDataIfLoose` runs on the `loadLoginData` read
+  path so an older bridge with a pre-existing 0644 file is closed
+  without a one-shot migration step.
+
+- **P0.1 mmol/L safety** — `src/transform/index.ts` detects
+  `bgunits`/`bgUnits` of `MMOL_L` (with casing fallbacks) and converts
+  `sg` to mg/dL at the SGV assignment site via
+  `Math.round(sg * 18.0182)`. Without this, a mmol/L CareLink
+  account flowing into Nightscout is interpreted as mg/dL by
+  downstream looping clients (Loop, xDrip, AAPS) and over-delivers
+  insulin. Asserted numerically: `5.5 mmol/L → 99 mg/dL`,
+  `2.0 → 36`, `22.2 → 400`.
+
+- **P0.2 lastAlarm policy** — `src/last-alarm.ts` plus
+  `NightscoutLastAlarmAnnotation` in `src/types/nightscout.ts`. CareLink
+  alarms surface as `devicestatus.last_alarm` with
+  code/datetime/text/severity. Priority-1 codes (paradigm
+  delivery-stopped 4/5/6/16/43/61) hit `console.warn` always-on,
+  irrespective of verbose mode. **No alarm relay to Nightscout
+  `/api/v1/treatments.json`** — verified by an absence-grep test over
+  `src/`. NGP-tier codes are intentionally empty pending a
+  sanitised 780G fixture.
+
+- **forceRefresh successive-401 regression fix** — `authenticate()`
+  now returns `Promise<boolean>` (true iff `refreshToken` actually
+  ran). `fetch()` only clears `forceRefresh` when authenticate did NOT
+  refresh. The pre-fix code re-sent a dead token across consecutive
+  401s because the flag was unconditionally reset every iteration.
+  The successive-401 test pins the fix: a 401 immediately after a
+  successful refresh+401 still triggers a second `refreshToken`
+  call.
+
+- **P3 trend `NONE` → `{trend: 4, direction: 'Flat'}`** — matches
+  Nightscout convention and every other CGM source's flat (xDrip,
+  nightscout-connect). Tested against the real `missingLastSgv`
+  fixture in `test/samples.ts` (with the trailing sg=0 entry
+  dropped at the test site so the production guard for "trend
+  attaches only when the most recent SG is real" is honoured).
+
+- **`NoAuth0SSOConfigurationError` named class +
+  `selectAuth0ConfigUrl` helper** — the named error is
+  grep-distinguishable in journald. The helper throws it on missing
+  `Auth0SSOConfiguration` in the discovery entry, carrying the
+  diagnostic context (region, appVersion) for operators. The
+  helper's behaviour is tested directly against a synthetic
+  `DiscoveryCpEntry` shaped like the v3.4 / v4.0 no-Auth0 tracks.
+
+- **Discovery pinning** — `DISCOVERY_APP_VERSION` and
+  `buildDiscoveryUrl(isUS)` extracted into `src/discovery.ts`. The
+  version string and the URL template
+  (`/connect/carepartner/v13/discover/...`) are testable
+  constants; a future contributor who edits either cannot
+  silently regress the bridge to a no-Auth0 track (3.4 / 4.0).
+
+- **Refresh-failure classification** — `isPermanentRefreshFailure`
+  predicate in `src/refresh-failure.ts` distinguishes permanent
+  (HTTP 400 + `invalid_grant` / `invalid_client`) from recoverable
+  (5xx, 429, transport, anything not matching the OAuth contract).
+  The catch in `authenticate()` is split: one try for
+  `refreshToken` (classified), one for `writeLoginDataAtomic`
+  (always retain + rethrow so a local disk failure doesn't nuke
+  the token). 18-test suite covers the three behaviours plus
+  defensive defaults (null, undefined, plain Error, etc.).
+
+- **Status-aware capped exponential backoff with jitter, honour
+  `Retry-After`** — `decideRetry` in `src/retry-policy.ts`
+  classifies each failed attempt: permanent 4xx fail fast, 429
+  honours `Retry-After` (numeric or HTTP-date) up to a cap, 5xx
+  and transport errors retry with full-jitter exponential backoff
+  (capped). The pre-fix fixed 2s/4s/8s path is replaced. The
+  401/403 path is short-circuited before `decideRetry` so the
+  existing force-refresh cycle still runs. Two integration
+  tests pin the wiring: 429 + `Retry-After: 25` — advance 10s,
+  assert no retry (the fixed 2s/4s/8s path would have retried
+  here); advance 20s more, assert the retry fired. 404 — one
+  call, not three.
+
 ### Changed
 
 - The systemd unit now uses systemd's `%h` specifier instead of a hardcoded
@@ -19,6 +102,34 @@ record, not reconstructed.
   editing — install into `~/carelink-bridge` and it resolves to the running
   user's home. (This also removes the maintainer's own paths from the shipped
   artifacts.)
+
+### Removed
+
+- **`CARELINK_MAX_RETRY_DURATION` env, the `Config.maxRetryDuration`
+  field, the `CareLinkClientOptions.maxRetryDuration` field, and
+  the `DEFAULT_MAX_RETRY_DURATION` constant** — the option had no
+  defined unit, the fetch loop never honoured it, and the fix-path
+  is the status-aware policy in `src/retry-policy.ts`.
+
+### Notes
+
+- This is expected to be the last contribution in the current
+  maintenance window. The 780G-payload-fixture items
+  (`markers[]` for treatments, `therapyAlgorithmState` for auto-mode,
+  `limits[]` schedule, multi-patient fan-out,
+  `reservoirLevelPercent` snap-points, NGP-tier alarm codes) are
+  deferred until a real pump arrives (currently expected November
+  2026) or another operator contributes sanitised fixtures. Project
+  maintenance continues passively — issue reports and security
+  advisories are still monitored. The token-permission and
+  atomic-write fixes shipped here provide the security baseline
+  the deferred items will inherit; the discovery-pinning and
+  named-error work provides the operational baseline.
+- The PR references for the new items are intentionally left as
+  plain bullets rather than `([#N])` because the GitHub PR/issue
+  numbers are not yet assigned. When the PR is opened, replace
+  the inline rationale with the assigned number to match the
+  existing convention.
 
 ## [0.1.6] — 2026-07-19
 

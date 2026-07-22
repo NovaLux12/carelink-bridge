@@ -5,6 +5,7 @@ import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
 import { loadLoginData, writeLoginDataAtomic, isTokenExpired, refreshToken } from './token.js';
 import { isPermanentRefreshFailure } from '../refresh-failure.js';
+import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
 
@@ -288,11 +289,13 @@ export class CareLinkClient {
   async fetch(): Promise<CareLinkData> {
     this.requestCount = 0;
 
-    // Up to 3 retries with exponential backoff (2s, 4s, 8s). If you need
-    // outbound proxying, set HTTPS_PROXY (or ALL_PROXY) — axios respects
-    // those natively, no fork-specific config required.
+    // Up to 3 attempts total. The retry decision per attempt is
+    // status-aware (see src/retry-policy.ts): 401/403 triggers an
+    // authenticated re-attempt; 429 honours Retry-After; permanent 4xx
+    // fails fast; 5xx and transport errors retry with capped exponential
+    // + jitter.
     const maxRetry = 3;
-    console.log('[Fetch] Starting fetch, max retries:', maxRetry);
+    console.log('[Fetch] Starting fetch, max attempts:', maxRetry);
 
     // CareLink can invalidate a token before its exp claim — most commonly
     // when the CareLink phone app logs into the same account. On 401/403,
@@ -315,19 +318,35 @@ export class CareLinkClient {
         console.log('[Fetch] Success!');
         return data;
       } catch (e: unknown) {
-        const err = e as { response?: { status: number }; code?: string; cause?: { code?: string }; message?: string };
+        const err = e as { response?: { status: number; headers?: Record<string, unknown> }; code?: string; cause?: { code?: string }; message?: string };
         const httpStatus = err.response?.status;
         const errorCode = err.code || err.cause?.code || '';
         console.log(`[Fetch] Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`);
 
+        // 401/403 is the auth path: the token may simply need a refresh,
+        // not a permanent backoff. Short-circuit decideRetry here because
+        // the retry policy treats 401/403 as fail-fast (the auth path's
+        // own job, not the retry policy's). Skipping decideRetry lets the
+        // next iteration run authenticate(forceRefresh = true) before
+        // another data call. On the last attempt, give up — the
+        // refresh-and-retry cycle has already exhausted itself.
         if (httpStatus === 401 || httpStatus === 403) {
           forceRefresh = true;
+          if (i === maxRetry) throw e;
+          continue;
         }
 
-        if (i === maxRetry) throw e;
-
-        const timeout = Math.pow(2, i);
-        await sleep(1000 * timeout);
+        // Status-aware retry decision for everything else. Permanent 4xx
+        // (other than 401/403) fail fast — no point hammering a host that
+        // has nothing to give. 429 honours Retry-After (numeric or
+        // HTTP-date). 5xx and transport errors retry with capped
+        // exponential + jitter. On the last attempt, decideRetry always
+        // returns fail-fast.
+        const decision = decideRetry(e, { attempt: i, maxAttempts: maxRetry });
+        if (decision.kind === 'fail-fast') {
+          throw e;
+        }
+        await sleep(decision.delayMs);
       }
     }
 
