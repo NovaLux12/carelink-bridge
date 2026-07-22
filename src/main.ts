@@ -23,7 +23,6 @@ logger.setVerbose(config.verbose);
 const client = new CareLinkClient({
   username: config.username,
   password: config.password,
-  maxRetryDuration: config.maxRetryDuration,
   patientId: config.patientId,
   countryCode: config.countryCode,
   lang: config.language,

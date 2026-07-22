@@ -1,10 +1,34 @@
 import * as logger from '../logger.js';
 import type { CareLinkData } from '../types/carelink.js';
-import type { NightscoutSGVEntry, NightscoutDeviceStatus, TransformResult } from '../types/nightscout.js';
+import { evaluateLastAlarm, logLastAlarm } from '../last-alarm.js';
+
+import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
 import { guessPumpOffset, guessPumpOffsetMilliseconds } from './pump-offset.js';
 
 const STALE_DATA_THRESHOLD_MINUTES = 20;
+
+const MMOL_L_TO_MGDL = 18.0182;
+
+/**
+ * Detects whether a CareLink payload reports glucose in mmol/L. CareLink has
+ * shipped both `bgUnits` and `bgunits` casing historically; we prefer the
+ * lower-case one and accept either. Returns true only for the explicit mmol
+ * marker — any other/unknown unit is treated as mg/dL (do not silently
+ * convert).
+ */
+function isMmolL(data: CareLinkData): boolean {
+  const u = (data.bgunits ?? data.bgUnits ?? '').toUpperCase();
+  return u === 'MMOL_L' || u === 'MMOL/L' || u === 'MMOL';
+}
+
+function normalizeSgToMgdl(sg: number, data: CareLinkData): number {
+  if (!isMmolL(data)) return sg;
+  // Round to the nearest integer mg/dL — Nightscout is mg/dL-native and
+  // fractional entries are confusing downstream (Loop, xDrip, AAPS all
+  // expect whole-number mg/dL).
+  return Math.round(sg * MMOL_L_TO_MGDL);
+}
 
 function parsePumpTime(
   pumpTimeString: string,
@@ -30,6 +54,16 @@ function deviceStatusEntry(
   offset: string,
   offsetMilliseconds: number,
 ): NightscoutDeviceStatus {
+  // Compute lastAlarm annotation + side-effect log once per transform call.
+  // Both branches (GUARDIAN, pump) attach the same annotation. NEVER
+  // publishes to /api/v1/treatments.json — see src/last-alarm.ts.
+  const lastAlarmEval = evaluateLastAlarm(data.lastAlarm);
+  if (lastAlarmEval) {
+    logLastAlarm(lastAlarmEval); // priority-1 codes always warn
+  }
+  const lastAlarm: NightscoutLastAlarmAnnotation | undefined =
+    lastAlarmEval?.annotation;
+
   if (data.medicalDeviceFamily === 'GUARDIAN') {
     return {
       created_at: timestampAsString(data.lastMedicalDeviceDataUpdateServerTime),
@@ -37,6 +71,9 @@ function deviceStatusEntry(
       uploader: {
         battery: data.medicalDeviceBatteryLevelPercent,
       },
+      last_alarm: lastAlarm,
+
+
       connect: {
         sensorState: data.sensorState,
         calibStatus: data.calibStatus,
@@ -57,6 +94,9 @@ function deviceStatusEntry(
     uploader: {
       battery: data.conduitBatteryLevel,
     },
+    last_alarm: lastAlarm,
+
+
     pump: {
       battery: { percent: data.medicalDeviceBatteryLevelPercent },
       reservoir: data.reservoirRemainingUnits ?? data.reservoirAmount,
@@ -97,7 +137,7 @@ function sgvEntries(
       const timestamp = parsePumpTime(sgv.datetime, offset, offsetMilliseconds);
       return {
         type: 'sgv' as const,
-        sgv: sgv.sg,
+        sgv: normalizeSgToMgdl(sgv.sg, data),
         date: timestamp,
         dateString: timestampAsString(timestamp),
         device: deviceName(data),

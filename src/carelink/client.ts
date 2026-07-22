@@ -3,7 +3,9 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './token.js';
+import { loadLoginData, writeLoginDataAtomic, isTokenExpired, refreshToken } from './token.js';
+import { isPermanentRefreshFailure } from '../refresh-failure.js';
+import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
 
@@ -11,7 +13,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const MAX_REQUESTS_PER_FETCH = 30;
-const DEFAULT_MAX_RETRY_DURATION = 512;
 
 export interface CareLinkClientOptions {
   username: string;
@@ -21,7 +22,6 @@ export interface CareLinkClientOptions {
   countryCode?: string;
   lang?: string;
   patientId?: string;
-  maxRetryDuration?: number;
 }
 
 export class CareLinkClient {
@@ -78,7 +78,12 @@ export class CareLinkClient {
     });
   }
 
-  private async authenticate(forceRefresh = false): Promise<void> {
+  // Returns `true` if this iteration actually performed a refresh, `false`
+  // if it just loaded existing tokens. The fetch() loop uses the return
+  // value to keep the `forceRefresh` flag set across successive 401s — a
+  // 401 immediately after a successful refresh+401 must still trigger
+  // another refresh.
+  private async authenticate(forceRefresh = false): Promise<boolean> {
     let loginData = loadLoginData(this.loginDataPath);
     if (!loginData) {
       throw new Error(
@@ -89,17 +94,39 @@ export class CareLinkClient {
     if (forceRefresh || isTokenExpired(loginData.access_token)) {
       try {
         loginData = await refreshToken(loginData);
-        saveLoginData(this.loginDataPath, loginData);
       } catch (e) {
-        // Delete stale logindata so next startup triggers re-login
-        try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
-        console.error('[Token] Deleted logindata.json — run "npm run login" to re-authenticate.');
-        throw new Error('Refresh token expired. Run "npm run login" to log in again.');
+        // Permanent auth failure (HTTP 400 + invalid_grant / invalid_client)
+        // means the refresh token is dead — operator must re-login. Any
+        // other error (transport, 5xx, 429, local exception) is treated as
+        // recoverable: the refresh token may still be valid, so retain the
+        // file and rethrow for the retry loop to handle.
+        if (isPermanentRefreshFailure(e)) {
+          try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
+          console.error('[Token] Deleted logindata.json — refresh token rejected. Run "npm run login" to re-authenticate.');
+          throw new Error('Refresh token rejected. Run "npm run login" to log in again.');
+        }
+        // Recoverable — rethrow the original error verbatim so the retry
+        // loop in fetch() can apply its own backoff policy.
+        throw e;
       }
+      try {
+        writeLoginDataAtomic(this.loginDataPath, loginData);
+      } catch (e) {
+        // Local disk failure (EACCES, ENOSPC, ENOENT) — refresh succeeded
+        // but the new tokens can't be persisted. NEVER delete the file
+        // here: the prior tokens are still good and a retry of
+        // writeLoginDataAtomic on the next fetch may succeed. Rethrow
+        // so the operator sees the real error.
+        throw e;
+      }
+      this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
+      console.log('[Token] Using token-based auth from logindata.json');
+      return true;
     }
 
     this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
     console.log('[Token] Using token-based auth from logindata.json');
+    return false;
   }
 
   // The username CareLink knows the account by. CARELINK_USERNAME in .env
@@ -262,11 +289,13 @@ export class CareLinkClient {
   async fetch(): Promise<CareLinkData> {
     this.requestCount = 0;
 
-    // Up to 3 retries with exponential backoff (2s, 4s, 8s). If you need
-    // outbound proxying, set HTTPS_PROXY (or ALL_PROXY) — axios respects
-    // those natively, no fork-specific config required.
+    // Up to 3 attempts total. The retry decision per attempt is
+    // status-aware (see src/retry-policy.ts): 401/403 triggers an
+    // authenticated re-attempt; 429 honours Retry-After; permanent 4xx
+    // fails fast; 5xx and transport errors retry with capped exponential
+    // + jitter.
     const maxRetry = 3;
-    console.log('[Fetch] Starting fetch, max retries:', maxRetry);
+    console.log('[Fetch] Starting fetch, max attempts:', maxRetry);
 
     // CareLink can invalidate a token before its exp claim — most commonly
     // when the CareLink phone app logs into the same account. On 401/403,
@@ -276,25 +305,48 @@ export class CareLinkClient {
     for (let i = 1; i <= maxRetry; i++) {
       try {
         this.requestCount = 0;
-        await this.authenticate(forceRefresh);
-        forceRefresh = false;
+        const didRefresh = await this.authenticate(forceRefresh);
+        // Only clear forceRefresh when this iteration did NOT perform a
+        // refresh. If authenticate returned true, the loop just ran a
+        // refresh and clearing the flag would let the next 401 fire
+        // without another refresh (the pre-fix bug — re-sends dead token
+        // until the by-the-clock isTokenExpired check fires again).
+        if (!didRefresh) {
+          forceRefresh = false;
+        }
         const data = await this.getConnectData();
         console.log('[Fetch] Success!');
         return data;
       } catch (e: unknown) {
-        const err = e as { response?: { status: number }; code?: string; cause?: { code?: string }; message?: string };
+        const err = e as { response?: { status: number; headers?: Record<string, unknown> }; code?: string; cause?: { code?: string }; message?: string };
         const httpStatus = err.response?.status;
         const errorCode = err.code || err.cause?.code || '';
         console.log(`[Fetch] Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`);
 
+        // 401/403 is the auth path: the token may simply need a refresh,
+        // not a permanent backoff. Short-circuit decideRetry here because
+        // the retry policy treats 401/403 as fail-fast (the auth path's
+        // own job, not the retry policy's). Skipping decideRetry lets the
+        // next iteration run authenticate(forceRefresh = true) before
+        // another data call. On the last attempt, give up — the
+        // refresh-and-retry cycle has already exhausted itself.
         if (httpStatus === 401 || httpStatus === 403) {
           forceRefresh = true;
+          if (i === maxRetry) throw e;
+          continue;
         }
 
-        if (i === maxRetry) throw e;
-
-        const timeout = Math.pow(2, i);
-        await sleep(1000 * timeout);
+        // Status-aware retry decision for everything else. Permanent 4xx
+        // (other than 401/403) fail fast — no point hammering a host that
+        // has nothing to give. 429 honours Retry-After (numeric or
+        // HTTP-date). 5xx and transport errors retry with capped
+        // exponential + jitter. On the last attempt, decideRetry always
+        // returns fail-fast.
+        const decision = decideRetry(e, { attempt: i, maxAttempts: maxRetry });
+        if (decision.kind === 'fail-fast') {
+          throw e;
+        }
+        await sleep(decision.delayMs);
       }
     }
 

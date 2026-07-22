@@ -8,20 +8,13 @@ import axios, { type AxiosInstance } from 'axios';
 import puppeteer from 'puppeteer-core';
 import qs from 'qs';
 import type { LoginData, Auth0SSOConfig, DiscoverResponse } from './types/carelink.js';
+import { writeLoginDataAtomic } from './carelink/token.js';
+import { selectAuth0ConfigUrl } from './login-errors.js';
+import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const LOGINDATA_FILE = path.join(__dirname, '..', 'logindata.json');
 
-// The discovery app-version string is load-bearing, not cosmetic. Medtronic's
-// discovery endpoint returns a *different* config per version, and only some
-// versions carry the Auth0 SSO config this login flow needs:
-//   android/3.4 -> cumulus v11, no Auth0 (legacy OAuth)
-//   android/3.6, 3.7 -> cumulus v13, Auth0 (what the current app + this code use)
-//   android/4.0 -> cumulus v2, careLink v1, no Auth0
-// Bumping this to a "newer"-looking number will silently drop onto a config
-// with no Auth0 SSO URL and break login. Keep it at a version verified to
-// return Auth0SSOConfiguration. (Verified against live discovery 2026-07-19.)
-const DISCOVERY_APP_VERSION = 'android/3.6';
 
 function toBase64Url(buf: Buffer): string {
   return buf.toString('base64')
@@ -88,8 +81,7 @@ function findBrowserPath(): string | undefined {
 }
 
 async function resolveAuth0Config(isUS: boolean): Promise<{ ssoConfig: Auth0SSOConfig; baseUrl: string }> {
-  const discoveryHost = isUS ? 'clcloud.minimed.com' : 'clcloud.minimed.eu';
-  const discoveryUrl = `https://${discoveryHost}/connect/carepartner/v13/discover/${DISCOVERY_APP_VERSION}`;
+  const discoveryUrl = buildDiscoveryUrl(isUS);
 
   console.log('[Login] Fetching discovery config...');
   const discoverResp = await axios.get<DiscoverResponse>(discoveryUrl);
@@ -100,17 +92,7 @@ async function resolveAuth0Config(isUS: boolean): Promise<{ ssoConfig: Auth0SSOC
   if (!cpEntry) {
     throw new Error('Could not find config for region: ' + region);
   }
-
-  const ssoConfigKey = cpEntry.UseSSOConfiguration || 'Auth0SSOConfiguration';
-  const ssoUrl = cpEntry[ssoConfigKey] as string | undefined;
-  if (!ssoUrl) {
-    throw new Error(
-      `Discovery returned no Auth0 SSO config URL for region "${region}" ` +
-      `(UseSSOConfiguration=${cpEntry.UseSSOConfiguration ?? 'absent'}). This usually means ` +
-      `DISCOVERY_APP_VERSION ("${DISCOVERY_APP_VERSION}") points at a config track without Auth0 — ` +
-      `keep it on a version known to return Auth0SSOConfiguration.`,
-    );
-  }
+  const ssoUrl = selectAuth0ConfigUrl(cpEntry, { region, appVersion: DISCOVERY_APP_VERSION });
 
   console.log('[Login] Fetching Auth0 SSO config...');
   const ssoResp = await axios.get<Auth0SSOConfig>(ssoUrl);
@@ -505,7 +487,7 @@ export async function login(isUS: boolean, username?: string, password?: string)
     audience: client.audience,
   };
 
-  fs.writeFileSync(LOGINDATA_FILE, JSON.stringify(loginData, null, 4));
+  writeLoginDataAtomic(LOGINDATA_FILE, loginData);
   console.log('[Login] Saved to logindata.json');
   return loginData;
 }
