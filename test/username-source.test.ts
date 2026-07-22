@@ -32,7 +32,7 @@ vi.mock('../src/carelink/token.js', () => ({
     client_id: 'client',
     token_url: 'https://example.invalid/oauth/token',
   })),
-  saveLoginData: vi.fn(),
+  writeLoginDataAtomic: vi.fn(),
   isTokenExpired: vi.fn(() => false),
   refreshToken: vi.fn(),
 }));

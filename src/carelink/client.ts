@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
-import { loadLoginData, saveLoginData, isTokenExpired, refreshToken } from './token.js';
+import { loadLoginData, writeLoginDataAtomic, isTokenExpired, refreshToken } from './token.js';
+import { isPermanentRefreshFailure } from '../refresh-failure.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
 
@@ -11,7 +12,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const MAX_REQUESTS_PER_FETCH = 30;
-const DEFAULT_MAX_RETRY_DURATION = 512;
 
 export interface CareLinkClientOptions {
   username: string;
@@ -21,7 +21,6 @@ export interface CareLinkClientOptions {
   countryCode?: string;
   lang?: string;
   patientId?: string;
-  maxRetryDuration?: number;
 }
 
 export class CareLinkClient {
@@ -78,7 +77,12 @@ export class CareLinkClient {
     });
   }
 
-  private async authenticate(forceRefresh = false): Promise<void> {
+  // Returns `true` if this iteration actually performed a refresh, `false`
+  // if it just loaded existing tokens. The fetch() loop uses the return
+  // value to keep the `forceRefresh` flag set across successive 401s — a
+  // 401 immediately after a successful refresh+401 must still trigger
+  // another refresh.
+  private async authenticate(forceRefresh = false): Promise<boolean> {
     let loginData = loadLoginData(this.loginDataPath);
     if (!loginData) {
       throw new Error(
@@ -89,17 +93,39 @@ export class CareLinkClient {
     if (forceRefresh || isTokenExpired(loginData.access_token)) {
       try {
         loginData = await refreshToken(loginData);
-        saveLoginData(this.loginDataPath, loginData);
       } catch (e) {
-        // Delete stale logindata so next startup triggers re-login
-        try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
-        console.error('[Token] Deleted logindata.json — run "npm run login" to re-authenticate.');
-        throw new Error('Refresh token expired. Run "npm run login" to log in again.');
+        // Permanent auth failure (HTTP 400 + invalid_grant / invalid_client)
+        // means the refresh token is dead — operator must re-login. Any
+        // other error (transport, 5xx, 429, local exception) is treated as
+        // recoverable: the refresh token may still be valid, so retain the
+        // file and rethrow for the retry loop to handle.
+        if (isPermanentRefreshFailure(e)) {
+          try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
+          console.error('[Token] Deleted logindata.json — refresh token rejected. Run "npm run login" to re-authenticate.');
+          throw new Error('Refresh token rejected. Run "npm run login" to log in again.');
+        }
+        // Recoverable — rethrow the original error verbatim so the retry
+        // loop in fetch() can apply its own backoff policy.
+        throw e;
       }
+      try {
+        writeLoginDataAtomic(this.loginDataPath, loginData);
+      } catch (e) {
+        // Local disk failure (EACCES, ENOSPC, ENOENT) — refresh succeeded
+        // but the new tokens can't be persisted. NEVER delete the file
+        // here: the prior tokens are still good and a retry of
+        // writeLoginDataAtomic on the next fetch may succeed. Rethrow
+        // so the operator sees the real error.
+        throw e;
+      }
+      this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
+      console.log('[Token] Using token-based auth from logindata.json');
+      return true;
     }
 
     this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
     console.log('[Token] Using token-based auth from logindata.json');
+    return false;
   }
 
   // The username CareLink knows the account by. CARELINK_USERNAME in .env
@@ -276,8 +302,15 @@ export class CareLinkClient {
     for (let i = 1; i <= maxRetry; i++) {
       try {
         this.requestCount = 0;
-        await this.authenticate(forceRefresh);
-        forceRefresh = false;
+        const didRefresh = await this.authenticate(forceRefresh);
+        // Only clear forceRefresh when this iteration did NOT perform a
+        // refresh. If authenticate returned true, the loop just ran a
+        // refresh and clearing the flag would let the next 401 fire
+        // without another refresh (the pre-fix bug — re-sends dead token
+        // until the by-the-clock isTokenExpired check fires again).
+        if (!didRefresh) {
+          forceRefresh = false;
+        }
         const data = await this.getConnectData();
         console.log('[Fetch] Success!');
         return data;

@@ -6,7 +6,6 @@ export interface Config {
   nsSecret: string;
   interval: number;
   sgvLimit: number;
-  maxRetryDuration: number;
   verbose: boolean;
   patientId?: string;
   countryCode: string;

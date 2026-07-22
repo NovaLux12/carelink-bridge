@@ -31,7 +31,7 @@ vi.mock('../src/carelink/token.js', () => ({
     client_id: 'client',
     token_url: 'https://example.invalid/oauth/token',
   })),
-  saveLoginData: vi.fn(),
+  writeLoginDataAtomic: vi.fn(),
   isTokenExpired: vi.fn(() => false),
   refreshToken: vi.fn(async (loginData: { access_token: string }) => ({
     ...loginData,
@@ -40,7 +40,7 @@ vi.mock('../src/carelink/token.js', () => ({
 }));
 
 import { CareLinkClient } from '../src/carelink/client.js';
-import { refreshToken, saveLoginData } from '../src/carelink/token.js';
+import { refreshToken, writeLoginDataAtomic } from '../src/carelink/token.js';
 
 function http401(): Error {
   const err = new Error('Request failed with status code 401') as Error & {
@@ -87,7 +87,7 @@ describe('CareLinkClient.fetch() on 401 (#21)', () => {
 
     expect(data).toEqual(monitorData);
     expect(refreshToken).toHaveBeenCalledTimes(1);
-    expect(saveLoginData).toHaveBeenCalledTimes(1);
+    expect(writeLoginDataAtomic).toHaveBeenCalledTimes(1);
     expect(axiosInstance.defaults.headers.common['Authorization']).toBe('Bearer fresh-token');
   });
 
@@ -131,6 +131,41 @@ describe('CareLinkClient.fetch() on 401 (#21)', () => {
 
     await expect(fetchPromise).rejects.toThrow('401');
     // Refresh was attempted for retries 2 and 3, but the API kept rejecting.
+    expect(refreshToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('should refresh again on a 401 immediately after a successful refresh+401', async () => {
+    // Regression test for the forceRefresh-reset-on-successive-401 polish.
+    //
+    // Pre-fix bug: the loop unconditionally set `forceRefresh = false` at
+    // the end of every iteration, even when authenticate had just
+    // refreshed and the data call 401'd anyway. Sequence: iter 1 ->
+    // /users/me 401 -> flag set. Iter 2 -> authenticate() refreshes
+    // (returns true) -> getConnectData() 401 -> loop sets flag=true
+    // already. So far so good. Iter 3: WITHOUT the fix, the unconditional
+    // reset at end of iter 2 (after authenticate returned true) would
+    // re-clear the flag, leading the next data-call 401 to retry a dead
+    // token. With the fix, refreshToken is invoked again.
+    //
+    // Mock: every /users/me attempt returns 401. With maxRetry=3 the loop
+    // runs three iterations; the fix must produce two refreshToken calls
+    // (iter 2 + iter 3), not one.
+    axiosInstance.get.mockImplementation(async (url: string) => {
+      if (url.includes('/users/me')) throw http401();
+      throw new Error('unexpected url: ' + url);
+    });
+
+    const client = new CareLinkClient({ username: 'u', password: 'p' });
+    const fetchPromise = client.fetch();
+    fetchPromise.catch(() => {}); // avoid unhandled rejection while timers advance
+    await vi.runAllTimersAsync();
+
+    await expect(fetchPromise).rejects.toThrow('401');
+
+    // Pre-fix: would be 1 (refresh on iter 2, flag cleared by unconditional
+    // reset, iter 3 re-sent dead token).
+    // Post-fix: refresh on iter 2 (returns true), refresh on iter 3 (flag
+    // stayed set because authenticate returned true).
     expect(refreshToken).toHaveBeenCalledTimes(2);
   });
 });

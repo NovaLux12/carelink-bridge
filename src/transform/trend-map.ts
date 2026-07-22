@@ -1,5 +1,8 @@
 export const CARELINK_TREND_TO_NIGHTSCOUT_TREND: Record<string, { trend: number; direction: string }> = {
-  NONE: { trend: 0, direction: 'NONE' },
+  // 'NONE' from CareLink means "no-change"; Nightscout convention is
+  // trend=4 direction='Flat'. nightscout-connect maps the same key to
+  // {trend:4, direction:'Flat'}; matches every other CGM source's flat.
+  NONE: { trend: 4, direction: 'Flat' },
   UP_TRIPLE: { trend: 1, direction: 'TripleUp' },
   UP_DOUBLE: { trend: 1, direction: 'DoubleUp' },
   UP: { trend: 2, direction: 'SingleUp' },

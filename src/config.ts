@@ -46,7 +46,6 @@ export function loadConfig(): Config {
     nsSecret,
     interval: parseInt(readEnvString('CARELINK_INTERVAL', String(defaultIntervalSeconds))!, 10) * 1000,
     sgvLimit: parseInt(readEnvString('CARELINK_SGV_LIMIT', '24')!, 10),
-    maxRetryDuration: parseInt(readEnvString('CARELINK_MAX_RETRY_DURATION', '512')!, 10),
     verbose: !readEnvBool('CARELINK_QUIET', true),
     patientId: readEnvString('CARELINK_PATIENT'),
     countryCode: readEnvString('MMCONNECT_COUNTRYCODE', 'gb')!,
