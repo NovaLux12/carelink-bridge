@@ -20,7 +20,7 @@ Each phase below has the same shape:
    "blocked" should name the specific thing that's missing.
 6. **Tracking** — the GitHub issue and any workboard card.
 
-## Phase status (2026-07-22)
+## Phase status (2026-07-27)
 
 | Phase | Status | Notes |
 |-------|--------|-------|
@@ -31,7 +31,7 @@ Each phase below has the same shape:
 | v0.1.4 | Shipped 2026-07-19 | Auth retry reliability |
 | v0.1.5 | Shipped 2026-07-19 | Username source fix |
 | v0.1.6 | Shipped 2026-07-19 | `npm run doctor` |
-| v0.2.0 | Shipped 2026-07-22 | Safety + reliability hardening |
+| v0.2.0 | Shipped 2026-07-22 | Safety + reliability hardening + operability (SIGTERM, stale-data) |
 | v0.3.0 | Proposed, blocked | Reliability improvements |
 | v0.4.0 | Proposed, blocked | Observability |
 | v0.5.0 | Partially shipped | Distribution (systemd done; docker, single-binary, HASS pending) |
@@ -131,6 +131,9 @@ code is non-zero on failure so it can gate a deploy.
 - [x] Refresh-failure classification — `isPermanentRefreshFailure` predicate; the token file is only deleted on a permanent Auth0 failure, not on transport / 5xx / 429 / local-disk errors.
 - [x] Status-aware capped exponential backoff with jitter, honour `Retry-After` — see [ADR 0001](./docs/adr/0001-status-aware-retry-policy.md).
 - [x] Removed `CARELINK_MAX_RETRY_DURATION` env and the related Config / options field / default — the option had no defined unit, the fetch loop never honoured it, and the new retry policy supersedes it.
+- [x] Graceful SIGTERM/SIGINT shutdown — on signal, the request loop finishes the current fetch+upload cycle, then exits 0. 10s force-exit timer prevents hanging. Second signal forces exit. (PR #43, 2026-07-27)
+- [x] Stale-data alert — tracks `lastSuccessTimestamp`; logs a `STALE` warning after `CARELINK_STALE_THRESHOLD_MINUTES` (default 15) with no successful fetch. One-shot per stale period. (PR #43, 2026-07-27)
+- [x] Optional stale webhook — if `STALE_WEBHOOK_URL` is set, POSTs JSON `{bridge, since, threshold_ms}` on stale entry. (PR #43, 2026-07-27)
 
 **Why this exists:** v0.1.x was "make it work." v0.2.0 is
 "make it not silently hurt someone." The mmol/L conversion
