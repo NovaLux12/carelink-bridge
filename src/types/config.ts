@@ -10,4 +10,6 @@ export interface Config {
   patientId?: string;
   countryCode: string;
   language: string;
+  staleThresholdMs: number;
+  staleWebhookUrl?: string;
 }

@@ -27,6 +27,12 @@ function readEnvBool(key: string, defaultVal: boolean): boolean {
   return Boolean(val);
 }
 
+function readEnvInt(key: string, defaultVal: number): number {
+  const val = readEnvString(key, String(defaultVal));
+  const parsed = parseInt(val!, 10);
+  return Number.isNaN(parsed) ? defaultVal : parsed;
+}
+
 export function loadConfig(): Config {
   const username = readEnvString('CARELINK_USERNAME');
   const password = readEnvString('CARELINK_PASSWORD');
@@ -37,6 +43,7 @@ export function loadConfig(): Config {
   if (!nsSecret) throw new Error('Missing API_SECRET');
 
   const defaultIntervalSeconds = 300;
+  const defaultStaleThresholdMinutes = 15;
 
   return {
     username,
@@ -44,11 +51,13 @@ export function loadConfig(): Config {
     nsHost: readEnvString('WEBSITE_HOSTNAME'),
     nsBaseUrl: readEnvString('NS'),
     nsSecret,
-    interval: parseInt(readEnvString('CARELINK_INTERVAL', String(defaultIntervalSeconds))!, 10) * 1000,
-    sgvLimit: parseInt(readEnvString('CARELINK_SGV_LIMIT', '24')!, 10),
+    interval: readEnvInt('CARELINK_INTERVAL', defaultIntervalSeconds) * 1000,
+    sgvLimit: readEnvInt('CARELINK_SGV_LIMIT', 24),
     verbose: !readEnvBool('CARELINK_QUIET', true),
     patientId: readEnvString('CARELINK_PATIENT'),
     countryCode: readEnvString('MMCONNECT_COUNTRYCODE', 'gb')!,
     language: readEnvString('MMCONNECT_LANGCODE', 'en')!,
+    staleThresholdMs: readEnvInt('CARELINK_STALE_THRESHOLD_MINUTES', defaultStaleThresholdMinutes) * 60 * 1000,
+    staleWebhookUrl: readEnvString('STALE_WEBHOOK_URL'),
   };
 }
