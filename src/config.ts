@@ -45,6 +45,9 @@ export function loadConfig(): Config {
   const defaultIntervalSeconds = 300;
   const defaultStaleThresholdMinutes = 15;
 
+  const rawLogFormat = readEnvString('LOG_FORMAT', 'pretty')!;
+  const logFormat = rawLogFormat === 'json' ? 'json' : 'pretty';
+
   return {
     username,
     password,
@@ -54,6 +57,7 @@ export function loadConfig(): Config {
     interval: readEnvInt('CARELINK_INTERVAL', defaultIntervalSeconds) * 1000,
     sgvLimit: readEnvInt('CARELINK_SGV_LIMIT', 24),
     verbose: !readEnvBool('CARELINK_QUIET', true),
+    logFormat,
     patientId: readEnvString('CARELINK_PATIENT'),
     countryCode: readEnvString('MMCONNECT_COUNTRYCODE', 'gb')!,
     language: readEnvString('MMCONNECT_LANGCODE', 'en')!,

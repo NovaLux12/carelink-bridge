@@ -1,3 +1,5 @@
+export type LogFormat = 'json' | 'pretty';
+
 export interface Config {
   username: string;
   password: string;
@@ -7,6 +9,7 @@ export interface Config {
   interval: number;
   sgvLimit: number;
   verbose: boolean;
+  logFormat: LogFormat;
   patientId?: string;
   countryCode: string;
   language: string;
