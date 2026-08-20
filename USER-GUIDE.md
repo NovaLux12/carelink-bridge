@@ -340,11 +340,47 @@ required — the rest are optional.
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_SGV_LIMIT` | `24` | How many SGV entries to upload per fetch |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
+| `LOG_FORMAT` | `pretty` | `pretty` (human, default) or `json` (one JSON object per line — for `journalctl -o json`, Loki, Vector). Never logs secrets; keys matching `secret/password/token` are redacted. |
 | `CARELINK_PATIENT` | *(empty)* | Patient username, only needed if your care-partner account has multiple patients |
 
 After changing any setting, restart the bridge (`Ctrl+C`,
 then `npm start`).
 
+### Structured logging (`LOG_FORMAT=json`)
+
+For log aggregation (systemd journal, Loki, Vector, Datadog), set `LOG_FORMAT=json` in your `.env`:
+
+```env
+LOG_FORMAT=json
+CARELINK_QUIET=false   # json logs are also verbose-gated for info; warn/error always emit
+```
+
+Each line is a single JSON object `{"ts":"2026-08-20T...","level":"info","msg":"Fetch succeeded",...}` that `journalctl -o json` or `jq` can filter without regex. In `pretty` mode (default) the bridge keeps its current `Date + message` format so existing `grep` workflows keep working.
+
+Secrets are never emitted — any structured field whose key matches `secret`, `password`, or `token` is replaced with `"[REDACTED]"` before output.
+
+### Prometheus metrics stub (`src/metrics.ts`)
+
+The bridge now tracks in-memory counters for observability without adding dependencies or opening a port:
+
+- `carelink_fetches_total{result="success|failure"}`
+- `carelink_uploads_total{endpoint="entries|devicestatus"}`
+- `carelink_token_refreshes_total{result="success|failure"}`
+- `carelink_last_success_timestamp_seconds` (gauge)
+- `carelink_fetch_duration_ms` (summary: p50/p90/p99, sum, count)
+
+Render the current snapshot with `renderPrometheus()` from `src/metrics.ts`. The `/metrics` HTTP endpoint and `carelink_circuit_open` gauge will arrive with the v0.4.0 circuit-breaker work — the stub is intentionally small so it doesn't change the bridge's security posture (still no inbound listener).
+
+## Pre-pump checklist (before your 780G arrives)
+
+If your pump hasn't arrived yet, you can still get everything else ready so data flows within ~5 minutes of `npm run login`. This is the checklist tracked in [issue #7](https://github.com/NovaLux12/carelink-bridge/issues/7):
+
+1. **Bridge host** — `bash deploy/install.sh` on the machine that will run the bridge; create `~/carelink-bridge/.env` from `deploy/systemd/carelink-bridge.env.example`; fill in `CARELINK_USERNAME`, `CARELINK_PASSWORD`, `API_SECRET`, `NS`; `chmod 600 ~/carelink-bridge/.env`; verify with `systemd-analyze --user verify deploy/systemd/carelink-bridge.service`.
+2. **Nightscout** — bring up your Nightscout site and confirm it responds (`curl https://your-nightscout/api/v1/status.json` → `200`); note the exact `NS` URL and `API_SECRET` — they must match the bridge's `.env`.
+3. **Pre-flight without a pump** — `npm run doctor` should show ✅ for `Config (.env)`, `CareLink reachable`, `Nightscout reachable`, and `Nightscout API secret`. `CareLink login` will show `warn` (no pump data yet) — that's expected before pairing.
+4. **Day the pump arrives** — pair the pump in the CareLink app, then `cd ~/carelink-bridge && npm run login` (one-time OAuth), `systemctl --user start carelink-bridge`, `journalctl --user -u carelink-bridge -f` and watch for `Fetch succeeded` within ~10 s; check `https://your-nightscout/api/v1/entries.json?count=10` for fresh SGVs.
+
+Full runbook: [deploy/README.md](./deploy/README.md).
 ## Proxy / firewall support
 
 If you need to route CareLink traffic through a proxy

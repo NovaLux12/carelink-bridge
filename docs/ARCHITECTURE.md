@@ -38,15 +38,16 @@ initiates outbound HTTPS.
 
 ```
 src/
-├── main.ts                  # Entry point: load config, ensure login, fetch loop
-├── config.ts                # .env → typed Config
+├── main.ts                  # Entry point: load config, ensure login, fetch loop (wires logger + metrics)
+├── config.ts                # .env → typed Config (includes LOG_FORMAT)
 ├── doctor.ts                # `npm run doctor` — pre-flight self-check
 ├── discovery.ts             # CareLink discovery app-version pin (ADR 0002)
 ├── login.ts                 # Three-strategy OAuth login flow
 ├── login-errors.ts          # Named error class for missing Auth0 config
 ├── filter.ts                # Recency filter — only upload new entries
 ├── last-alarm.ts            # CareLink alarm → Nightscout annotation
-├── logger.ts                # Verbose-mode gating
+├── logger.ts                # Structured logger: pretty (default) or json (LOG_FORMAT=json), no PII
+├── metrics.ts               # Prometheus stub: in-memory counters + renderPrometheus() (no HTTP server yet)
 ├── refresh-failure.ts       # Classify Auth0 refresh failures (recoverable vs permanent)
 ├── retry-policy.ts          # Status-aware retry (ADR 0001)
 │

@@ -7,19 +7,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load environment variables
 dotenv.config();
-
 import { loadConfig } from './config.js';
 import { CareLinkClient } from './carelink/client.js';
 import { transform } from './transform/index.js';
 import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
+import * as metrics from './metrics.js';
 import { login, LOGINDATA_FILE } from './login.js';
 import type { NightscoutSGVEntry, NightscoutDeviceStatus } from './types/nightscout.js';
 
 const config = loadConfig();
 logger.setVerbose(config.verbose);
-
+logger.setLogFormat(config.logFormat);
 const client = new CareLinkClient({
   username: config.username,
   password: config.password,
@@ -131,8 +131,12 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
   }
   try {
     await upload(items, endpoint, config.nsSecret);
+    const kind = endpoint.includes('entries') ? 'entries' as const : 'devicestatus' as const;
+    metrics.incUpload(kind, items.length);
+    logger.info('Upload succeeded', { endpoint, count: items.length });
   } catch (err) {
     // Continue even if Nightscout can't be reached
+    logger.error('Upload failed', { endpoint });
     console.error(err);
   }
 }
@@ -141,19 +145,32 @@ async function requestLoop(): Promise<void> {
   const abortSignal = { aborted: false };
 
   while (!shuttingDown) {
+    const t0 = Date.now();
     try {
       const data = await client.fetch();
 
       if (!data?.lastMedicalDeviceDataUpdateServerTime) {
+        metrics.incFetch('failure');
+        logger.warn('Empty or invalid data from CareLink', { keys: Object.keys(data || {}).length });
         console.log('[Bridge] Warning: received empty or invalid data from CareLink');
         console.log('[Bridge] Data keys:', Object.keys(data || {}));
       } else {
+        metrics.incFetch('success');
+        metrics.setLastSuccess(Date.now());
+        metrics.observeFetchDuration(Date.now() - t0);
+
         const transformed = transform(data, config.sgvLimit);
         const newSgvs = filterSgvs(transformed.entries);
         const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
 
         lastSuccessTimestamp = Date.now();
         staleNotified = false;
+
+        logger.info('Fetch succeeded', {
+          sgvCount: transformed.entries.length,
+          newSgvCount: newSgvs.length,
+          newDeviceStatusCount: newDeviceStatuses.length,
+        });
 
         logger.log(
           `Next check in ${Math.round(config.interval / 1000)}s` +
@@ -164,6 +181,9 @@ async function requestLoop(): Promise<void> {
         await uploadIfNew(newDeviceStatuses, devicestatusUrl);
       }
     } catch (error) {
+      metrics.incFetch('failure');
+      metrics.observeFetchDuration(Date.now() - t0);
+      logger.error('Fetch failed', { error: (error as Error).message });
       console.error(error);
     }
 
