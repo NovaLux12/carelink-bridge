@@ -15,4 +15,7 @@ export interface Config {
   language: string;
   staleThresholdMs: number;
   staleWebhookUrl?: string;
+  stateFile?: string;
+  circuitThreshold: number;
+  circuitCooldownMs: number;
 }

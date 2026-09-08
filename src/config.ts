@@ -63,5 +63,8 @@ export function loadConfig(): Config {
     language: readEnvString('MMCONNECT_LANGCODE', 'en')!,
     staleThresholdMs: readEnvInt('CARELINK_STALE_THRESHOLD_MINUTES', defaultStaleThresholdMinutes) * 60 * 1000,
     staleWebhookUrl: readEnvString('STALE_WEBHOOK_URL'),
+    stateFile: readEnvString('CARELINK_STATE_FILE'),
+    circuitThreshold: readEnvInt('CARELINK_CIRCUIT_THRESHOLD', 5),
+    circuitCooldownMs: readEnvInt('CARELINK_CIRCUIT_COOLDOWN_S', 60) * 1000,
   };
 }

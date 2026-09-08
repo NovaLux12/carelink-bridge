@@ -15,18 +15,35 @@ import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
 import { login, LOGINDATA_FILE } from './login.js';
+import { loadPersistentState, savePersistentState, type PersistentState } from './persistent-state.js';
 import type { NightscoutSGVEntry, NightscoutDeviceStatus } from './types/nightscout.js';
 
 const config = loadConfig();
 logger.setVerbose(config.verbose);
 logger.setLogFormat(config.logFormat);
+
+// Persistent state (issue #9 item 4): survives restarts, mode 0600.
+// Default sits next to logindata.json; override with CARELINK_STATE_FILE.
+const STATE_FILE = config.stateFile || path.join(path.dirname(LOGINDATA_FILE), 'state.json');
+const persisted: PersistentState = loadPersistentState(STATE_FILE);
+if (persisted.lastSuccessTimestamp !== null) {
+  console.log(`[State] Restored last success: ${new Date(persisted.lastSuccessTimestamp).toISOString()}`);
+}
+if (persisted.consecutiveFailures > 0) {
+  console.log(`[State] Restored circuit state: ${persisted.consecutiveFailures} consecutive failures`);
+}
+
 const client = new CareLinkClient({
   username: config.username,
   password: config.password,
   patientId: config.patientId,
   countryCode: config.countryCode,
   lang: config.language,
+  circuitThreshold: config.circuitThreshold,
+  circuitCooldownMs: config.circuitCooldownMs,
 });
+client.restoreCircuitState(persisted);
+client.setRefreshTracking(persisted.lastRefreshTokenUse, persisted.nextScheduledRefresh);
 
 const baseUrl = config.nsBaseUrl || ('https://' + config.nsHost);
 const entriesUrl = baseUrl + '/api/v1/entries.json';
@@ -37,9 +54,25 @@ const filterDeviceStatus = makeRecencyFilter<NightscoutDeviceStatus>(
   item => new Date(item.created_at).getTime(),
 );
 
-// --- Stale-data tracking ---
-let lastSuccessTimestamp: number | null = null;
+// --- Stale-data tracking (seeded from persistent state) ---
+let lastSuccessTimestamp: number | null = persisted.lastSuccessTimestamp;
 let staleNotified = false;
+
+function persistState(): void {
+  try {
+    savePersistentState(STATE_FILE, {
+      version: persisted.version,
+      lastSuccessTimestamp,
+      consecutiveFailures: client.getConsecutiveFailures(),
+      circuitOpenUntil: client.getCircuitOpenUntil(),
+      lastRefreshTokenUse: client.getLastRefreshAt(),
+      nextScheduledRefresh: client.getNextScheduledRefresh(),
+    });
+  } catch (err) {
+    // State is best-effort — a disk failure here must never break the loop.
+    console.error('[State] Failed to persist state.json:', (err as Error).message);
+  }
+}
 
 async function fireStaleWebhook(since: number): Promise<void> {
   if (!config.staleWebhookUrl) return;
@@ -165,6 +198,7 @@ async function requestLoop(): Promise<void> {
 
         lastSuccessTimestamp = Date.now();
         staleNotified = false;
+        persistState();
 
         logger.info('Fetch succeeded', {
           sgvCount: transformed.entries.length,
@@ -185,6 +219,7 @@ async function requestLoop(): Promise<void> {
       metrics.observeFetchDuration(Date.now() - t0);
       logger.error('Fetch failed', { error: (error as Error).message });
       console.error(error);
+      persistState();
     }
 
     checkStale();
