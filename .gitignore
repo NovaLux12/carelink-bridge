@@ -1,6 +1,7 @@
 node_modules/
 dist/
 logindata.json
+state.json
 *.env
 .idea/
 # research/ holds the Medtronic CareLink investigation notes that inform

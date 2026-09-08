@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import axios, { type AxiosInstance } from 'axios';
 import * as logger from '../logger.js';
-import { loadLoginData, writeLoginDataAtomic, isTokenExpired, refreshToken } from './token.js';
+import { loadLoginData, writeLoginDataAtomic, isTokenExpired, refreshToken, decodeTokenPayload } from './token.js';
+import { CircuitBreaker, DEFAULT_CIRCUIT_THRESHOLD, DEFAULT_CIRCUIT_COOLDOWN_MS } from '../circuit-breaker.js';
 import { isPermanentRefreshFailure } from '../refresh-failure.js';
 import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
@@ -22,6 +23,8 @@ export interface CareLinkClientOptions {
   countryCode?: string;
   lang?: string;
   patientId?: string;
+  circuitThreshold?: number;
+  circuitCooldownMs?: number;
 }
 
 export class CareLinkClient {
@@ -31,6 +34,9 @@ export class CareLinkClient {
   private serverName: string;
   private options: CareLinkClientOptions;
   private requestCount = 0;
+  private circuitBreaker: CircuitBreaker;
+  private lastRefreshAt: number | null = null;
+  private nextScheduledRefresh: number | null = null;
 
   constructor(options: CareLinkClientOptions) {
     this.options = options;
@@ -44,6 +50,10 @@ export class CareLinkClient {
     );
     this.urls = buildUrls(this.serverName, countryCode, lang);
     this.loginDataPath = path.join(__dirname, '..', '..', 'logindata.json');
+    this.circuitBreaker = new CircuitBreaker(
+      options.circuitThreshold ?? DEFAULT_CIRCUIT_THRESHOLD,
+      options.circuitCooldownMs ?? DEFAULT_CIRCUIT_COOLDOWN_MS,
+    );
 
     // Set up axios
     this.axiosInstance = axios.create({
@@ -78,6 +88,50 @@ export class CareLinkClient {
     });
   }
 
+  /** Circuit-breaker + refresh introspection for main.ts persistence and tests. */
+  isCircuitOpen(now = Date.now()): boolean {
+    return this.circuitBreaker.isOpen(now);
+  }
+
+  getConsecutiveFailures(): number {
+    return this.circuitBreaker.getConsecutiveFailures();
+  }
+
+  getCircuitOpenUntil(): number {
+    return this.circuitBreaker.getOpenUntil();
+  }
+
+  getLastRefreshAt(): number | null {
+    return this.lastRefreshAt;
+  }
+
+  getNextScheduledRefresh(): number | null {
+    return this.nextScheduledRefresh;
+  }
+
+  restoreCircuitState(state: { consecutiveFailures?: number; circuitOpenUntil?: number }): void {
+    this.circuitBreaker.restore(state);
+  }
+
+  setRefreshTracking(lastRefreshAt: number | null, nextScheduledRefresh: number | null): void {
+    this.lastRefreshAt = lastRefreshAt;
+    this.nextScheduledRefresh = nextScheduledRefresh;
+  }
+
+  private updateNextScheduledRefresh(accessToken: string): void {
+    try {
+      const payload = decodeTokenPayload(accessToken);
+      const exp = payload?.['exp'];
+      if (typeof exp === 'number') {
+        // Proactive refresh target: exp minus the same 600s margin
+        // isTokenExpired() uses, so the next refresh fires before failure.
+        this.nextScheduledRefresh = exp * 1000 - 600 * 1000;
+      }
+    } catch {
+      // Malformed token — leave nextScheduledRefresh as-is.
+    }
+  }
+
   // Returns `true` if this iteration actually performed a refresh, `false`
   // if it just loaded existing tokens. The fetch() loop uses the return
   // value to keep the `forceRefresh` flag set across successive 401s — a
@@ -94,6 +148,8 @@ export class CareLinkClient {
     if (forceRefresh || isTokenExpired(loginData.access_token)) {
       try {
         loginData = await refreshToken(loginData);
+        this.lastRefreshAt = Date.now();
+        this.updateNextScheduledRefresh(loginData.access_token);
       } catch (e) {
         // Permanent auth failure (HTTP 400 + invalid_grant / invalid_client)
         // means the refresh token is dead — operator must re-login. Any
@@ -125,6 +181,7 @@ export class CareLinkClient {
     }
 
     this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
+    this.updateNextScheduledRefresh(loginData.access_token);
     console.log('[Token] Using token-based auth from logindata.json');
     return false;
   }
@@ -286,7 +343,30 @@ export class CareLinkClient {
     return resp.data;
   }
 
+  private throwAndRecord(e: unknown): never {
+    const justOpened = this.circuitBreaker.recordFailure();
+    if (justOpened) {
+      const until = new Date(this.circuitBreaker.getOpenUntil()).toISOString();
+      logger.warn('Circuit breaker open — pausing CareLink retries', {
+        consecutiveFailures: this.circuitBreaker.getConsecutiveFailures(),
+        openUntil: until,
+      });
+    }
+    throw e;
+  }
+
   async fetch(): Promise<CareLinkData> {
+    // Circuit breaker (issue #9 item 3): after N consecutive failed fetch()
+    // calls, short-circuit without touching the network for the cooldown.
+    // The per-attempt backoff inside this method still applies when closed.
+    if (this.circuitBreaker.isOpen()) {
+      const until = new Date(this.circuitBreaker.getOpenUntil()).toISOString();
+      throw new Error(
+        `Circuit breaker open — skipping CareLink fetch until ${until} ` +
+        `after ${this.circuitBreaker.getConsecutiveFailures()} consecutive failures`,
+      );
+    }
+
     this.requestCount = 0;
 
     // Up to 3 attempts total. The retry decision per attempt is
@@ -315,6 +395,10 @@ export class CareLinkClient {
           forceRefresh = false;
         }
         const data = await this.getConnectData();
+        const closedCircuit = this.circuitBreaker.recordSuccess();
+        if (closedCircuit) {
+          logger.warn('Circuit breaker closed — CareLink reachable again');
+        }
         console.log('[Fetch] Success!');
         return data;
       } catch (e: unknown) {
@@ -332,7 +416,7 @@ export class CareLinkClient {
         // refresh-and-retry cycle has already exhausted itself.
         if (httpStatus === 401 || httpStatus === 403) {
           forceRefresh = true;
-          if (i === maxRetry) throw e;
+          if (i === maxRetry) this.throwAndRecord(e);
           continue;
         }
 
@@ -344,13 +428,13 @@ export class CareLinkClient {
         // returns fail-fast.
         const decision = decideRetry(e, { attempt: i, maxAttempts: maxRetry });
         if (decision.kind === 'fail-fast') {
-          throw e;
+          this.throwAndRecord(e);
         }
         await sleep(decision.delayMs);
       }
     }
 
-    throw new Error('Fetch failed after all retries');
+    this.throwAndRecord(new Error('Fetch failed after all retries'));
   }
 }
 
