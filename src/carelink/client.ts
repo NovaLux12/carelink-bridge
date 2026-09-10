@@ -158,7 +158,7 @@ export class CareLinkClient {
         // file and rethrow for the retry loop to handle.
         if (isPermanentRefreshFailure(e)) {
           try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
-          console.error('[Token] Deleted logindata.json — refresh token rejected. Run "npm run login" to re-authenticate.');
+          logger.error('Deleted logindata.json — refresh token rejected. Run "npm run login" to re-authenticate.', { component: 'token' });
           throw new Error('Refresh token rejected. Run "npm run login" to log in again.');
         }
         // Recoverable — rethrow the original error verbatim so the retry
@@ -176,13 +176,13 @@ export class CareLinkClient {
         throw e;
       }
       this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
-      console.log('[Token] Using token-based auth from logindata.json');
+      logger.info('Using token-based auth from logindata.json', { component: 'token' });
       return true;
     }
 
     this.axiosInstance.defaults.headers.common['Authorization'] = 'Bearer ' + loginData.access_token;
     this.updateNextScheduledRefresh(loginData.access_token);
-    console.log('[Token] Using token-based auth from logindata.json');
+    logger.info('Using token-based auth from logindata.json', { component: 'token' });
     return false;
   }
 
@@ -375,7 +375,7 @@ export class CareLinkClient {
     // fails fast; 5xx and transport errors retry with capped exponential
     // + jitter.
     const maxRetry = 3;
-    console.log('[Fetch] Starting fetch, max attempts:', maxRetry);
+    logger.info('Starting fetch', { component: 'fetch', maxAttempts: maxRetry });
 
     // CareLink can invalidate a token before its exp claim — most commonly
     // when the CareLink phone app logs into the same account. On 401/403,
@@ -399,13 +399,13 @@ export class CareLinkClient {
         if (closedCircuit) {
           logger.warn('Circuit breaker closed — CareLink reachable again');
         }
-        console.log('[Fetch] Success!');
+        logger.info('Success!', { component: 'fetch' });
         return data;
       } catch (e: unknown) {
         const err = e as { response?: { status: number; headers?: Record<string, unknown> }; code?: string; cause?: { code?: string }; message?: string };
         const httpStatus = err.response?.status;
         const errorCode = err.code || err.cause?.code || '';
-        console.log(`[Fetch] Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`);
+        logger.info(`Attempt ${i} failed: ${httpStatus ? 'HTTP ' + httpStatus : errorCode || (err as Error).message}`, { component: 'fetch', attempt: i });
 
         // 401/403 is the auth path: the token may simply need a refresh,
         // not a permanent backoff. Short-circuit decideRetry here because

@@ -66,8 +66,7 @@ export function startObserveServer(opts: ObserveServerOptions): http.Server {
     logger.error('Observability server error', { error: (err as Error).message, port: opts.port });
   });
   server.listen(opts.port, host, () => {
-    logger.info('Observability server listening', { host, port: opts.port });
-    console.log(`[Bridge] Observability: http://${host}:${opts.port}/healthz + /metrics`);
+    logger.info('Observability server listening', { component: 'bridge', host, port: opts.port });
   });
   return server;
 }
