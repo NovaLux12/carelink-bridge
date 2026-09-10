@@ -1,9 +1,10 @@
 /**
- * Prometheus metrics stub — zero dependencies, stdlib only.
+ * Prometheus metrics — zero dependencies, stdlib only.
  *
- * v0.4.0 observability slice (issue #10). Small, safe increment: in-memory
- * counters/gauges with a hand-rolled exposition renderer. No HTTP server —
- * callers that later add a /metrics endpoint can call renderPrometheus().
+ * v0.4.0 observability slice (issue #10). In-memory counters/gauges with
+ * a hand-rolled exposition renderer. Served over HTTP by
+ * src/observe-server.ts (/metrics + /healthz, opt-in via
+ * CARELINK_METRICS_PORT); renderPrometheus() is also usable standalone.
  *
  * All labels are low-cardinality (result, endpoint) — never usernames,
  * tokens, or per-record values — so the exposition cannot leak PII.
@@ -25,6 +26,7 @@ let uploadsDevicestatus = 0;
 let tokenRefreshSuccess = 0;
 let tokenRefreshFailure = 0;
 let lastSuccessTimestampMs: number | null = null;
+let circuitOpen = false;
 
 const fetchDurationsMs: number[] = [];
 const MAX_DURATIONS = 100;
@@ -48,6 +50,11 @@ export function setLastSuccess(tsMs: number): void {
   lastSuccessTimestampMs = tsMs;
 }
 
+/** Updated by main.ts from client.isCircuitOpen() — feeds carelink_circuit_open. */
+export function setCircuitOpen(open: boolean): void {
+  circuitOpen = open;
+}
+
 export function observeFetchDuration(ms: number): void {
   fetchDurationsMs.push(ms);
   if (fetchDurationsMs.length > MAX_DURATIONS) fetchDurationsMs.shift();
@@ -62,6 +69,7 @@ export function getSnapshot() {
     tokenRefreshSuccess,
     tokenRefreshFailure,
     lastSuccessTimestampMs,
+    circuitOpen,
     fetchDurationsMs: [...fetchDurationsMs],
   };
 }
@@ -74,6 +82,7 @@ export function reset(): void {
   tokenRefreshSuccess = 0;
   tokenRefreshFailure = 0;
   lastSuccessTimestampMs = null;
+  circuitOpen = false;
   fetchDurationsMs.length = 0;
 }
 
@@ -108,6 +117,11 @@ export function renderPrometheus(): string {
   lines.push('# HELP carelink_last_success_timestamp_seconds Unix timestamp of last successful fetch');
   lines.push('# TYPE carelink_last_success_timestamp_seconds gauge');
   lines.push(`carelink_last_success_timestamp_seconds ${tsSec}`);
+  lines.push('');
+
+  lines.push('# HELP carelink_circuit_open Whether the CareLink circuit breaker is open (1) or closed (0)');
+  lines.push('# TYPE carelink_circuit_open gauge');
+  lines.push(`carelink_circuit_open ${circuitOpen ? 1 : 0}`);
   lines.push('');
 
   if (fetchDurationsMs.length > 0) {

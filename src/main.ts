@@ -14,6 +14,8 @@ import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
+import type { Server } from 'node:http';
+import { startObserveServer } from './observe-server.js';
 import { login, LOGINDATA_FILE } from './login.js';
 import { loadPersistentState, savePersistentState, type PersistentState } from './persistent-state.js';
 import type { NightscoutSGVEntry, NightscoutDeviceStatus } from './types/nightscout.js';
@@ -112,6 +114,25 @@ function checkStale(): void {
   }
 }
 
+// --- Opt-in observability server (issue #10 item 2): loopback-only /healthz + /metrics.
+// Disabled by default (CARELINK_METRICS_PORT unset/0) so the bridge still opens
+// no inbound port unless the operator asks for it.
+let observeServer: Server | null = null;
+if (config.metricsPort > 0) {
+  observeServer = startObserveServer({
+    port: config.metricsPort,
+    getStatus: () => {
+      const circuitOpen = client.isCircuitOpen();
+      metrics.setCircuitOpen(circuitOpen);
+      return {
+        lastSuccessTimestamp,
+        consecutiveFailures: client.getConsecutiveFailures(),
+        circuitOpen,
+      };
+    },
+  });
+}
+
 // --- Graceful shutdown ---
 let shuttingDown = false;
 let loopResolve: (() => void) | null = null;
@@ -122,6 +143,10 @@ function handleShutdown(signal: string): void {
     process.exit(1);
   }
   shuttingDown = true;
+  if (observeServer) {
+    observeServer.close();
+    observeServer = null;
+  }
   console.log(`[Bridge] Received ${signal} — shutting down gracefully (max 10s)`);
 
   const forceTimer = setTimeout(() => {
@@ -221,6 +246,7 @@ async function requestLoop(): Promise<void> {
       console.error(error);
       persistState();
     }
+    metrics.setCircuitOpen(client.isCircuitOpen());
 
     checkStale();
 

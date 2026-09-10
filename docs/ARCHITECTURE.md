@@ -31,8 +31,9 @@ flowchart LR
 
 The bridge is a **fetch-and-upload daemon**. It owns no long-lived
 state except a single file (`logindata.json`) holding the OAuth
-tokens. There is no inbound network listener; the bridge only
-initiates outbound HTTPS.
+tokens. By default there is no inbound network listener; the bridge only
+initiates outbound HTTPS. Setting CARELINK_METRICS_PORT opts into a
+loopback-only observability server (/healthz + /metrics, src/observe-server.ts).
 
 ## Module map
 
@@ -47,7 +48,8 @@ src/
 ├── filter.ts                # Recency filter — only upload new entries
 ├── last-alarm.ts            # CareLink alarm → Nightscout annotation
 ├── logger.ts                # Structured logger: pretty (default) or json (LOG_FORMAT=json), no PII
-├── metrics.ts               # Prometheus stub: in-memory counters + renderPrometheus() (no HTTP server yet)
+├── metrics.ts               # Prometheus counters/gauges + renderPrometheus() (incl. carelink_circuit_open)
+├── observe-server.ts        # Opt-in loopback /healthz + /metrics server (node:http, CARELINK_METRICS_PORT)
 ├── refresh-failure.ts       # Classify Auth0 refresh failures (recoverable vs permanent)
 ├── retry-policy.ts          # Status-aware retry (ADR 0001)
 │
