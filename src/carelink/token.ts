@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import * as logger from '../logger.js';
 import axios from 'axios';
 import qs from 'qs';
 import type { LoginData } from '../types/carelink.js';
@@ -16,7 +17,7 @@ export function tightenLoginDataIfLoose(filePath: string): void {
   try {
     const stat = fs.lstatSync(filePath); // lstat — do not follow symlinks
     if (stat.isSymbolicLink()) {
-      console.log('[Token] Refusing to tighten symlinked logindata.json');
+      logger.warn('Refusing to tighten symlinked logindata.json', { component: 'token', path: filePath });
       return;
     }
     const current = (stat.mode & 0o777);
@@ -40,13 +41,13 @@ export function loadLoginData(filePath: string): LoginData | null {
 
     for (const field of required) {
       if (!data[field]) {
-        console.log('[Token] logindata.json missing field: ' + field);
+        logger.warn('logindata.json missing field: ' + field, { component: 'token', field: String(field), path: filePath });
         return null;
       }
     }
     return data;
   } catch (e) {
-    console.log('[Token] Failed to read logindata.json:', (e as Error).message);
+    logger.error('Failed to read logindata.json', { component: 'token', error: (e as Error).message, path: filePath });
     return null;
   }
 }
@@ -140,7 +141,7 @@ export function isTokenExpired(accessToken: string): boolean {
 }
 
 export async function refreshToken(loginData: LoginData): Promise<LoginData> {
-  console.log('[Token] Refreshing access token...');
+  logger.info('Refreshing access token...', { component: 'token' });
 
   const resp = await axios.post(
     loginData.token_url,
@@ -157,6 +158,6 @@ export async function refreshToken(loginData: LoginData): Promise<LoginData> {
     loginData.refresh_token = resp.data.refresh_token;
   }
 
-  console.log('[Token] Token refreshed successfully');
+  logger.info('Token refreshed successfully', { component: 'token' });
   return loginData;
 }

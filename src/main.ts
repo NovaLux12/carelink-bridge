@@ -89,10 +89,10 @@ async function fireStaleWebhook(since: number): Promise<void> {
       }),
     });
     if (!res.ok) {
-      console.error(`[Bridge] Stale webhook returned ${res.status}`);
+      logger.error(`Stale webhook returned ${res.status}`, { component: 'bridge', status: res.status });
     }
   } catch (err) {
-    console.error('[Bridge] Stale webhook failed:', (err as Error).message);
+    logger.error('Stale webhook failed', { component: 'bridge', error: (err as Error).message });
   }
 }
 
@@ -103,13 +103,13 @@ function checkStale(): void {
   if (elapsed > config.staleThresholdMs) {
     if (!staleNotified) {
       const mins = Math.round(elapsed / 60000);
-      console.warn(`[Bridge] STALE — no successful fetch for ${mins} min (threshold ${config.staleThresholdMs / 60000} min)`);
+      logger.warn(`STALE — no successful fetch for ${mins} min (threshold ${config.staleThresholdMs / 60000} min)`, { component: 'bridge' });
       staleNotified = true;
       void fireStaleWebhook(lastSuccessTimestamp);
     }
   } else if (staleNotified) {
     // Recovered
-    console.log('[Bridge] Recovered — fetch succeeded after stale period');
+    logger.info('Recovered — fetch succeeded after stale period', { component: 'bridge' });
     staleNotified = false;
   }
 }
@@ -139,7 +139,7 @@ let loopResolve: (() => void) | null = null;
 
 function handleShutdown(signal: string): void {
   if (shuttingDown) {
-    console.log(`[Bridge] Received ${signal} again — forcing exit`);
+    logger.info(`Received ${signal} again — forcing exit`, { component: 'bridge', signal });
     process.exit(1);
   }
   shuttingDown = true;
@@ -147,10 +147,10 @@ function handleShutdown(signal: string): void {
     observeServer.close();
     observeServer = null;
   }
-  console.log(`[Bridge] Received ${signal} — shutting down gracefully (max 10s)`);
+  logger.info(`Received ${signal} — shutting down gracefully (max 10s)`, { component: 'bridge', signal });
 
   const forceTimer = setTimeout(() => {
-    console.error('[Bridge] Graceful shutdown timed out — forcing exit');
+    logger.error('Graceful shutdown timed out — forcing exit', { component: 'bridge' });
     process.exit(1);
   }, 10_000);
 
@@ -209,9 +209,7 @@ async function requestLoop(): Promise<void> {
 
       if (!data?.lastMedicalDeviceDataUpdateServerTime) {
         metrics.incFetch('failure');
-        logger.warn('Empty or invalid data from CareLink', { keys: Object.keys(data || {}).length });
-        console.log('[Bridge] Warning: received empty or invalid data from CareLink');
-        console.log('[Bridge] Data keys:', Object.keys(data || {}));
+        logger.warn('Empty or invalid data from CareLink', { component: 'bridge', keys: Object.keys(data || {}).length });
       } else {
         metrics.incFetch('success');
         metrics.setLastSuccess(Date.now());
@@ -259,7 +257,7 @@ async function requestLoop(): Promise<void> {
 
 async function ensureLogin(): Promise<void> {
   if (!fs.existsSync(LOGINDATA_FILE)) {
-    console.log('[Bridge] No logindata.json found — starting login flow...');
+    logger.info('No logindata.json found — starting login flow...', { component: 'bridge' });
     const isUS = (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
     await login(isUS, config.username, config.password);
     console.log('');
@@ -269,9 +267,9 @@ async function ensureLogin(): Promise<void> {
 // Start
 try {
   await ensureLogin();
-  console.log(`[Bridge] Starting — interval set to ${config.interval / 1000}s`);
-  console.log(`[Bridge] Stale threshold: ${config.staleThresholdMs / 60000} min${config.staleWebhookUrl ? ' (webhook enabled)' : ''}`);
-  console.log('[Bridge] Fetching data now...');
+  logger.info(`Starting — interval set to ${config.interval / 1000}s`, { component: 'bridge', intervalMs: config.interval });
+  logger.info(`Stale threshold: ${config.staleThresholdMs / 60000} min${config.staleWebhookUrl ? ' (webhook enabled)' : ''}`, { component: 'bridge', staleThresholdMs: config.staleThresholdMs });
+  logger.info('Fetching data now...', { component: 'bridge' });
 
   const loopPromise = requestLoop();
 
@@ -285,9 +283,9 @@ try {
     }
   });
 
-  console.log('[Bridge] Shutdown complete');
+  logger.info('Shutdown complete', { component: 'bridge' });
   process.exit(0);
 } catch (err) {
-  console.error('[Bridge] Fatal:', (err as Error).message);
+  logger.error('Fatal', { component: 'bridge', error: (err as Error).message });
   process.exit(1);
 }
