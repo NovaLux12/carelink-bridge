@@ -66,5 +66,6 @@ export function loadConfig(): Config {
     stateFile: readEnvString('CARELINK_STATE_FILE'),
     circuitThreshold: readEnvInt('CARELINK_CIRCUIT_THRESHOLD', 5),
     circuitCooldownMs: readEnvInt('CARELINK_CIRCUIT_COOLDOWN_S', 60) * 1000,
+    metricsPort: readEnvInt('CARELINK_METRICS_PORT', 0),
   };
 }

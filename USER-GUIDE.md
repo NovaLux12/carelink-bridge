@@ -342,6 +342,7 @@ required — the rest are optional.
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
 | `LOG_FORMAT` | `pretty` | `pretty` (human, default) or `json` (one JSON object per line — for `journalctl -o json`, Loki, Vector). Never logs secrets; keys matching `secret/password/token` are redacted. |
 | `CARELINK_PATIENT` | *(empty)* | Patient username, only needed if your care-partner account has multiple patients |
+| `CARELINK_METRICS_PORT` | `0` | `0` = disabled (default, no inbound port). Set e.g. `8081` for a loopback-only observability server (`/healthz` + `/metrics`). |
 
 After changing any setting, restart the bridge (`Ctrl+C`,
 then `npm start`).
@@ -359,17 +360,29 @@ Each line is a single JSON object `{"ts":"2026-08-20T...","level":"info","msg":"
 
 Secrets are never emitted — any structured field whose key matches `secret`, `password`, or `token` is replaced with `"[REDACTED]"` before output.
 
-### Prometheus metrics stub (`src/metrics.ts`)
+### Prometheus metrics + health (`CARELINK_METRICS_PORT`)
 
-The bridge now tracks in-memory counters for observability without adding dependencies or opening a port:
+The bridge tracks in-memory counters with zero dependencies (`src/metrics.ts`):
 
 - `carelink_fetches_total{result="success|failure"}`
 - `carelink_uploads_total{endpoint="entries|devicestatus"}`
 - `carelink_token_refreshes_total{result="success|failure"}`
 - `carelink_last_success_timestamp_seconds` (gauge)
+- `carelink_circuit_open` (gauge: 1 = circuit open, 0 = closed)
 - `carelink_fetch_duration_ms` (summary: p50/p90/p99, sum, count)
 
-Render the current snapshot with `renderPrometheus()` from `src/metrics.ts`. The `/metrics` HTTP endpoint and `carelink_circuit_open` gauge will arrive with the v0.4.0 circuit-breaker work — the stub is intentionally small so it doesn't change the bridge's security posture (still no inbound listener).
+They are served over HTTP only when you opt in — set `CARELINK_METRICS_PORT=8081`
+in your `.env` and restart. The server binds `127.0.0.1` only (loopback, no
+LAN/Internet surface; the systemd unit needs no change):
+
+```sh
+curl http://127.0.0.1:8081/healthz   # {"status":"ok","lastSuccessTimestamp":...,"consecutiveFailures":0,"circuitOpen":false}
+curl http://127.0.0.1:8081/metrics   # Prometheus exposition for scraping
+```
+
+With the port unset (default `0`) the bridge opens no inbound port at all.
+Nothing user-identifying is served — all labels are low-cardinality
+(`result`, `endpoint`).
 
 ## Pre-pump checklist (before your 780G arrives)
 

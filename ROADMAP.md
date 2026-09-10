@@ -176,9 +176,9 @@ isn't clobbered by token refresh races.
 **Goal:** make the bridge debuggable from logs and metrics,
 not just from `console.log` scraping.
 
-- [ ] Structured JSON logs (`--pretty` for human, JSON default)
-- [ ] Prometheus metrics endpoint (`/metrics`)
-- [ ] Request counter, error counter, `last_success_timestamp` gauge
+- [x] Structured JSON logs (`LOG_FORMAT=json|pretty`; migrating `[Bridge]`/`[Token]` prefixes to `component:` fields still open — see issue #10)
+- [x] Prometheus metrics endpoint (`/metrics` + `/healthz`, opt-in via `CARELINK_METRICS_PORT`, loopback-only — no systemd change needed: `RestrictAddressFamilies` already permits `AF_INET` loopback)
+- [x] Request counter, error counter, `last_success_timestamp` gauge, `carelink_circuit_open` gauge
 
 **What unblocks it:** v0.2.0's `decideRetry` returns
 structured reasons (`'permanent-status'`, `'rate-limited'`,

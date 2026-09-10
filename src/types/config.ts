@@ -18,4 +18,6 @@ export interface Config {
   stateFile?: string;
   circuitThreshold: number;
   circuitCooldownMs: number;
+  /** 0 = disabled (default, no inbound port). >0 = loopback-only /healthz + /metrics. */
+  metricsPort: number;
 }
