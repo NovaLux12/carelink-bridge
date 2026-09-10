@@ -119,6 +119,33 @@ systemctl --user restart carelink-bridge
 
 For a major version (e.g. v0.2.0), check the release notes first — there may be `.env` additions or breaking config changes.
 
+### Docker (alternative to systemd)
+
+The repo root ships a multi-stage `Dockerfile` (`node:22-bookworm-slim`,
+small runtime image, runs as `USER node`). The bridge is also wired in as
+a sibling service in `deploy/nightscout-docker-compose.yml`.
+
+```bash
+# 1. Same prerequisites as systemd: .env configured, then one-time login
+#    (logindata.json is created on the host, mounted read-only below).
+cd ~/carelink-bridge && npm run login
+
+# 2a. Standalone container.
+docker build -t carelink-bridge .
+docker run -d --name carelink-bridge --env-file .env \
+  -v "$PWD/logindata.json:/app/logindata.json:ro" carelink-bridge
+
+# 2b. Or as part of the Nightscout stack.
+cd deploy && docker compose up -d --build carelink-bridge
+```
+
+Health: the image sets `CARELINK_METRICS_PORT=8081` by default so the
+container-level `HEALTHCHECK` can probe the loopback-only `/healthz`
+(bound to the container's own `127.0.0.1` — no port publishing needed).
+`docker ps` shows `unhealthy` when the bridge process dies. Override with
+`--env CARELINK_METRICS_PORT=0` to run headless (healthcheck will report
+unhealthy — it has nothing to probe).
+
 ## Hardening
 
 The systemd unit ships with defence-in-depth settings:
@@ -132,13 +159,13 @@ The systemd unit ships with defence-in-depth settings:
 | `RestrictAddressFamilies=AF_INET AF_INET6` | Only IPv4 + IPv6 sockets — no Unix domain sockets |
 | `SystemCallArchitectures=native` | No `x86_64` emulation if you're on a non-x86 host |
 
-The bridge is a network client, not a server, so `RestrictAddressFamilies` is fine. If you ever add a `healthz` endpoint (v0.2.0 roadmap), it'll need to bind to a local port — you'll have to relax that.
+The bridge is a network client, not a server, so `RestrictAddressFamilies` is fine. The opt-in observability server (`CARELINK_METRICS_PORT`, loopback-only `/healthz` + `/metrics`) binds a local port, which `AF_INET`/`AF_INET6` already permit — no unit change needed.
 
 ## Security considerations
 
 - **`logindata.json` contains OAuth tokens with full CareLink account access.** The systemd unit confines write access to the bridge directory (a per-file grant breaks token-file rotation — see issue #16). Treat it like a password.
 - **`.env` contains your CareLink password AND Nightscout API secret.** Same handling.
-- **The service makes outbound HTTPS to two endpoints**: CareLink (`*.minimed.{eu,com}`) and your Nightscout. There are no inbound network listeners.
+- **The service makes outbound HTTPS to two endpoints**: CareLink (`*.minimed.{eu,com}`) and your Nightscout. There are no inbound network listeners (the opt-in observability server binds the container/host loopback only).
 - **The bridge is not FDA-approved** and may violate Medtronic's Terms of Service. Using it is at your own risk. See `SECURITY.md` for the full threat model.
 
 ## Disabling / removing
