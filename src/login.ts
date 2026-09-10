@@ -11,6 +11,7 @@ import type { LoginData, Auth0SSOConfig, DiscoverResponse } from './types/careli
 import { writeLoginDataAtomic } from './carelink/token.js';
 import { selectAuth0ConfigUrl } from './login-errors.js';
 import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
+import * as logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const LOGINDATA_FILE = path.join(__dirname, '..', 'logindata.json');
@@ -83,7 +84,7 @@ function findBrowserPath(): string | undefined {
 async function resolveAuth0Config(isUS: boolean): Promise<{ ssoConfig: Auth0SSOConfig; baseUrl: string }> {
   const discoveryUrl = buildDiscoveryUrl(isUS);
 
-  console.log('[Login] Fetching discovery config...');
+  logger.info('Fetching discovery config...', { component: 'login' });
   const discoverResp = await axios.get<DiscoverResponse>(discoveryUrl);
   const discoverData = discoverResp.data;
 
@@ -94,7 +95,7 @@ async function resolveAuth0Config(isUS: boolean): Promise<{ ssoConfig: Auth0SSOC
   }
   const ssoUrl = selectAuth0ConfigUrl(cpEntry, { region, appVersion: DISCOVERY_APP_VERSION });
 
-  console.log('[Login] Fetching Auth0 SSO config...');
+  logger.info('Fetching Auth0 SSO config...', { component: 'login' });
   const ssoResp = await axios.get<Auth0SSOConfig>(ssoUrl);
   const ssoConfig = ssoResp.data;
 
@@ -162,7 +163,7 @@ async function loginAutomated(
     state: toBase64Url(crypto.randomBytes(16)),
   };
 
-  console.log('[Login] Starting automated login...');
+  logger.info('Starting automated login...', { component: 'login' });
   let resp = await httpClient.get(authorizeUrl + '?' + qs.stringify(authorizeParams));
 
   // Follow redirects to the login page
@@ -201,7 +202,7 @@ async function loginAutomated(
     : loginPageUrl;
 
   // POST credentials
-  console.log('[Login] Submitting credentials...');
+  logger.info('Submitting credentials...', { component: 'login' });
   resp = await httpClient.post(postUrl, qs.stringify({
     ...hiddenFields,
     username,
@@ -246,7 +247,7 @@ async function loginAutomated(
     throw new Error('Could not extract authorization code from redirect chain');
   }
 
-  console.log('[Login] Got authorization code');
+  logger.info('Got authorization code', { component: 'login' });
   return code;
 }
 
@@ -279,7 +280,7 @@ async function loginViaBrowser(
   };
   const fullUrl = authorizeUrl + '?' + qs.stringify(params);
 
-  console.log('[Login] Opening browser window...');
+  logger.info('Opening browser window...', { component: 'login' });
   const browser = await puppeteer.launch({
     executablePath: browserPath,
     headless: false,
@@ -308,7 +309,7 @@ async function loginViaBrowser(
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
-      console.log('[Login] Got authorization code');
+      logger.info('Got authorization code', { component: 'login' });
       browser.close().catch(() => {});
       resolve(code);
     }
@@ -369,7 +370,7 @@ async function loginViaBrowser(
       if (code) done(code);
     });
 
-    console.log('[Login] Log in to CareLink in the browser window...');
+    logger.info('Log in to CareLink in the browser window...', { component: 'login' });
     page.goto(fullUrl, { waitUntil: 'domcontentloaded' }).catch(() => {
       // Navigation error is expected if there's an immediate redirect
     });
@@ -439,10 +440,10 @@ export async function login(isUS: boolean, username?: string, password?: string)
       const msg = (err as Error).message;
       if (msg.includes('Invalid username or password')) throw err;
       if (msg.includes('CAPTCHA')) {
-        console.log('[Login] CAPTCHA detected — opening browser.');
+        logger.warn('CAPTCHA detected — opening browser', { component: 'login' });
       } else {
-        console.log('[Login] Automated login failed:', msg);
-        console.log('[Login] Falling back to browser...');
+        logger.warn('Automated login failed', { component: 'login', error: msg });
+        logger.info('Falling back to browser...', { component: 'login' });
       }
     }
   }
@@ -453,14 +454,14 @@ export async function login(isUS: boolean, username?: string, password?: string)
       authCode = await loginViaBrowser(ssoConfig, baseUrl, codeChallenge);
     } catch (err) {
       const msg = (err as Error).message;
-      console.log('[Login] Browser login failed:', msg);
-      console.log('[Login] Falling back to terminal...');
+      logger.warn('Browser login failed', { component: 'login', error: msg });
+      logger.info('Falling back to terminal...', { component: 'login' });
       authCode = await loginViaTerminal(ssoConfig, baseUrl, codeChallenge);
     }
   }
 
   // Exchange authorization code for tokens
-  console.log('[Login] Exchanging code for tokens...');
+  logger.info('Exchanging code for tokens...', { component: 'login' });
   const tokenUrl = baseUrl + ssoConfig.system_endpoints.token_endpoint_path;
   const tokenResp = await axios.post(tokenUrl, qs.stringify({
     grant_type: 'authorization_code',
@@ -476,7 +477,7 @@ export async function login(isUS: boolean, username?: string, password?: string)
     throw new Error('Token exchange failed: ' + JSON.stringify(tokenResp.data));
   }
 
-  console.log('[Login] Got tokens');
+  logger.info('Got tokens', { component: 'login' });
 
   const loginData: LoginData = {
     access_token: tokenResp.data.access_token,
@@ -488,7 +489,7 @@ export async function login(isUS: boolean, username?: string, password?: string)
   };
 
   writeLoginDataAtomic(LOGINDATA_FILE, loginData);
-  console.log('[Login] Saved to logindata.json');
+  logger.info('Saved to logindata.json', { component: 'login' });
   return loginData;
 }
 
@@ -502,13 +503,16 @@ const isMainModule = process.argv[1] &&
 if (isMainModule) {
   const dotenv = await import('dotenv');
   dotenv.config();
+  // Interactive one-shot CLI: progress lines are the UX, so always show info.
+  // (When login() runs inside the daemon, the daemon's verbose flag governs.)
+  logger.setVerbose(true);
 
   const isUS = (process.env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
-  console.log('[Login] Region:', isUS ? 'US' : 'EU');
+  logger.info(`Region: ${isUS ? 'US' : 'EU'}`, { component: 'login', region: isUS ? 'US' : 'EU' });
 
   if (fs.existsSync(LOGINDATA_FILE)) {
-    console.log('[Login] logindata.json already exists.');
-    console.log('[Login] Delete it first if you want to re-login.');
+    logger.info('logindata.json already exists.', { component: 'login' });
+    logger.info('Delete it first if you want to re-login.', { component: 'login' });
     process.exit(0);
   }
 
@@ -516,7 +520,7 @@ if (isMainModule) {
   const password = process.env['CARELINK_PASSWORD'];
 
   if (username && password) {
-    console.log('[Login] Found credentials in .env, trying automated login first...');
+    logger.info('Found credentials in .env, trying automated login first...', { component: 'login' });
   }
 
   try {
@@ -524,7 +528,7 @@ if (isMainModule) {
     console.log('');
     console.log('Login successful! You can now run: npm start');
   } catch (err) {
-    console.error('[Login] Failed:', (err as Error).message);
+    logger.error('Login failed', { component: 'login', error: (err as Error).message });
     process.exit(1);
   }
 }

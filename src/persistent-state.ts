@@ -14,6 +14,7 @@
  */
 
 import fs from 'node:fs';
+import * as logger from './logger.js';
 
 const SECRET_FILE_MODE = 0o600;
 export const STATE_VERSION = 1;
@@ -69,12 +70,12 @@ export function loadPersistentState(filePath: string): PersistentState {
     const raw = fs.readFileSync(filePath, 'utf8');
     const data: unknown = JSON.parse(raw);
     if (!isValidState(data)) {
-      console.log('[State] state.json invalid (version/shape) — starting fresh');
+      logger.warn('state.json invalid (version/shape) — starting fresh', { component: 'state', path: filePath });
       return defaultState();
     }
     return data;
   } catch (e) {
-    console.log('[State] Failed to read state.json:', (e as Error).message);
+    logger.error('Failed to read state.json', { component: 'state', error: (e as Error).message, path: filePath });
     return defaultState();
   }
 }
