@@ -29,10 +29,10 @@ logger.setLogFormat(config.logFormat);
 const STATE_FILE = config.stateFile || path.join(path.dirname(LOGINDATA_FILE), 'state.json');
 const persisted: PersistentState = loadPersistentState(STATE_FILE);
 if (persisted.lastSuccessTimestamp !== null) {
-  console.log(`[State] Restored last success: ${new Date(persisted.lastSuccessTimestamp).toISOString()}`);
+  logger.info(`Restored last success: ${new Date(persisted.lastSuccessTimestamp).toISOString()}`, { component: 'state' });
 }
 if (persisted.consecutiveFailures > 0) {
-  console.log(`[State] Restored circuit state: ${persisted.consecutiveFailures} consecutive failures`);
+  logger.info(`Restored circuit state: ${persisted.consecutiveFailures} consecutive failures`, { component: 'state' });
 }
 
 const client = new CareLinkClient({
@@ -72,7 +72,7 @@ function persistState(): void {
     });
   } catch (err) {
     // State is best-effort — a disk failure here must never break the loop.
-    console.error('[State] Failed to persist state.json:', (err as Error).message);
+    logger.error('Failed to persist state.json', { component: 'state', error: (err as Error).message });
   }
 }
 
@@ -194,8 +194,7 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
     logger.info('Upload succeeded', { endpoint, count: items.length });
   } catch (err) {
     // Continue even if Nightscout can't be reached
-    logger.error('Upload failed', { endpoint });
-    console.error(err);
+    logger.error('Upload failed', { endpoint, error: (err as Error).message });
   }
 }
 
@@ -241,7 +240,6 @@ async function requestLoop(): Promise<void> {
       metrics.incFetch('failure');
       metrics.observeFetchDuration(Date.now() - t0);
       logger.error('Fetch failed', { error: (error as Error).message });
-      console.error(error);
       persistState();
     }
     metrics.setCircuitOpen(client.isCircuitOpen());

@@ -88,6 +88,20 @@ services:
     depends_on:
       - nightscout
 
+  carelink-bridge:
+    # Built from the repo root (this file lives in deploy/). Talks to
+    # Nightscout over HTTPS at its public URL, so no published ports and
+    # no dependency ordering needed.
+    build: ..
+    container_name: carelink-bridge
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      # Created externally via `npm run login`; read-only in the container.
+      # state.json is written to /app (image runs as USER node, /app chowned).
+      - ../logindata.json:/app/logindata.json:ro
+
 volumes:
   mongo-data:
     # Docker-managed named volume. Survives container restarts.

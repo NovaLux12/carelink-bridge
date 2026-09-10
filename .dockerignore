@@ -1,0 +1,17 @@
+# Keep secrets and build noise out of the Docker build context.
+node_modules/
+dist/
+.git/
+# Secrets — provided at runtime via --env-file / read-only mount, never baked in.
+logindata.json
+state.json
+.env
+*.env
+# Local-only investigation notes and editor droppings (see .gitignore).
+research/
+AGENTS.md
+CLAUDE.md
+.claude/
+.idea/
+.DS_Store
+npm-debug.log*
