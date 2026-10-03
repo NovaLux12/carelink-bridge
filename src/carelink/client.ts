@@ -151,11 +151,16 @@ export class CareLinkClient {
         this.lastRefreshAt = Date.now();
         this.updateNextScheduledRefresh(loginData.access_token);
       } catch (e) {
-        // Permanent auth failure (HTTP 400 + invalid_grant / invalid_client)
-        // means the refresh token is dead — operator must re-login. Any
-        // other error (transport, 5xx, 429, local exception) is treated as
-        // recoverable: the refresh token may still be valid, so retain the
-        // file and rethrow for the retry loop to handle.
+        // Permanent auth failure (any 4xx from the refresh endpoint
+        // without Retry-After — see src/refresh-failure.ts) means the
+        // refresh token is dead and the operator must re-login. The
+        // canonical case is HTTP 400 + invalid_grant / invalid_client,
+        // but Auth0 has also been seen returning HTTP 401/403 with
+        // empty bodies when the refresh token is revoked out-of-band
+        // (issue #65). Any other error (transport, 5xx, 4xx with
+        // Retry-After, local exception) is treated as recoverable: the
+        // refresh token may still be valid, so retain the file and
+        // rethrow for the retry loop to handle.
         if (isPermanentRefreshFailure(e)) {
           try { fs.unlinkSync(this.loginDataPath); } catch { /* ignore */ }
           logger.error('Deleted logindata.json — refresh token rejected. Run "npm run login" to re-authenticate.', { component: 'token' });
