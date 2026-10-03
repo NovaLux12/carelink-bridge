@@ -8,19 +8,36 @@ import { isPermanentRefreshFailure } from '../src/refresh-failure.js';
  * (memo line 40: "classify permanent auth failures separately from
  * transport/5xx failures").
  *
- * Three behaviors the predicate must enforce:
- *   1. HTTP 400 + body `error: 'invalid_grant'` → permanent (delete token)
- *   2. HTTP 400 + body `error: 'invalid_client'` → permanent (delete token)
- *   3. Transport errors (ECONNRESET, 5xx, 429) → recoverable (retain token)
+ * Issue #65 widened the predicate: any 4xx-from-refresh WITHOUT a
+ * `Retry-After` header is permanent. Auth0 has been seen returning HTTP
+ * 403 with an empty body when the refresh token is revoked out-of-band
+ * (e.g. by the CareLink phone app logging in), so the previous narrow
+ * shape (400 + invalid_grant/invalid_client only) let the bridge enter
+ * an infinite refresh loop. The broadened shape keeps the OAuth
+ * 400+invalid_grant/invalid_client cases as a subset (still permanent)
+ * while adding the 401/403-with-empty-body and other unexpected 4xx
+ * cases the operator actually hits in production.
  *
- * Anything not matching the OAuth 400 invalid_grant/invalid_client shape
- * defaults to recoverable. This is conservative: a future Auth0 surface
- * that returns a new error code does not silently delete the token file.
+ * Four behaviors the predicate must enforce:
+ *   1. HTTP 4xx (no Retry-After) → permanent (delete token). The classic
+ *      Auth0 invalid_grant / invalid_client shapes are a subset.
+ *   2. HTTP 4xx + Retry-After → transient (honour Retry-After).
+ *   3. HTTP 5xx → transient (server-side, not token-side).
+ *   4. Transport errors (ECONNRESET, ETIMEDOUT, ENOTFOUND) → transient
+ *      (network, not token-side).
+ *
+ * 4xx + Retry-After is a narrow edge case — Auth0 in practice never
+ * sends it — but the predicate handles it correctly so a future tenant
+ * change can't silently delete the token file.
  */
 
-function axiosError(status: number, body: unknown): unknown {
+function axiosError(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): unknown {
   return {
-    response: { status, data: body },
+    response: { status, data: body, headers },
   };
 }
 
@@ -45,7 +62,8 @@ describe('isPermanentRefreshFailure', () => {
 
     it('returns true even when the body also carries an error_description', () => {
       // Auth0 commonly returns both `error` and `error_description`. The
-      // predicate must key on `error` only; the description is human text.
+      // predicate must key on status alone (with no Retry-After); the
+      // description is human text and must not be inspected.
       expect(
         isPermanentRefreshFailure(axiosError(400, {
           error: 'invalid_grant',
@@ -53,23 +71,48 @@ describe('isPermanentRefreshFailure', () => {
         })),
       ).toBe(true);
     });
+
+    // Issue #65: this is the regression test that pinned the bug.
+    // Auth0 returns HTTP 403 with an empty body when the refresh token
+    // has been revoked out-of-band (carepartner account logging in on
+    // the CareLink phone app is the canonical trigger). Pre-fix the
+    // predicate returned false → bridge looped forever. Post-fix it
+    // returns true → bridge prompts for re-login.
+    it('returns true for HTTP 403 with an empty body (#65 regression)', () => {
+      expect(
+        isPermanentRefreshFailure(axiosError(403, null)),
+      ).toBe(true);
+    });
+
+    it('returns true for HTTP 403 with a JSON body (#65 regression, JSON shape)', () => {
+      // Some Auth0 tenants return a small JSON body alongside 403; the
+      // predicate must not require an empty body.
+      expect(
+        isPermanentRefreshFailure(axiosError(403, { error: 'forbidden' })),
+      ).toBe(true);
+    });
+
+    it('returns true for HTTP 401 with no body', () => {
+      expect(
+        isPermanentRefreshFailure(axiosError(401, null)),
+      ).toBe(true);
+    });
+
+    it('returns true for HTTP 404 from the refresh endpoint', () => {
+      // Misconfigured token_url or moved endpoint — surface it.
+      expect(
+        isPermanentRefreshFailure(axiosError(404, { error: 'not_found' })),
+      ).toBe(true);
+    });
+
+    it('returns true for HTTP 422 (e.g. malformed refresh token)', () => {
+      expect(
+        isPermanentRefreshFailure(axiosError(422, { error: 'invalid_grant' })),
+      ).toBe(true);
+    });
   });
 
   describe('recoverable (token MUST be retained)', () => {
-    it('returns false for HTTP 400 with a non-recognised error code', () => {
-      // 400 is not enough — many Auth0 paths return 400 for malformed
-      // requests. The `error` field identifies the failure mode.
-      expect(
-        isPermanentRefreshFailure(axiosError(400, { error: 'invalid_request' })),
-      ).toBe(false);
-    });
-
-    it('returns false for HTTP 400 with no error field at all', () => {
-      expect(
-        isPermanentRefreshFailure(axiosError(400, { detail: 'something else' })),
-      ).toBe(false);
-    });
-
     it('returns false for HTTP 500', () => {
       expect(
         isPermanentRefreshFailure(axiosError(500, { error: 'server_error' })),
@@ -82,18 +125,60 @@ describe('isPermanentRefreshFailure', () => {
       ).toBe(false);
     });
 
-    it('returns false for HTTP 429 (rate limit)', () => {
+    it('returns false for HTTP 502 / 504 (transient gateway failures)', () => {
+      expect(isPermanentRefreshFailure(axiosError(502, null))).toBe(false);
+      expect(isPermanentRefreshFailure(axiosError(504, null))).toBe(false);
+    });
+
+    it('returns false for HTTP 429 with a Retry-After header (transient)', () => {
+      // Auth0 / a future tenant change could start returning 429 +
+      // Retry-After on the refresh endpoint. Server is asking us to
+      // back off, so the refresh token may still be valid.
       expect(
-        isPermanentRefreshFailure(axiosError(429, { error: 'rate_limited' })),
+        isPermanentRefreshFailure(axiosError(
+          429,
+          { error: 'rate_limited' },
+          { 'retry-after': '5' },
+        )),
       ).toBe(false);
     });
 
-    it('returns false for HTTP 401/403 (handled by forceRefresh, not deletion)', () => {
-      // The 401/403 path is for the data endpoint, not the refresh endpoint.
-      // If the refresh endpoint ever returns 401/403, treat it as a token
-      // we may retry, not as a deletion signal.
-      expect(isPermanentRefreshFailure(axiosError(401, null))).toBe(false);
-      expect(isPermanentRefreshFailure(axiosError(403, null))).toBe(false);
+    it('returns false for HTTP 403 with a Retry-After header (transient)', () => {
+      // 4xx + Retry-After is the narrow edge case the predicate handles
+      // to stay robust against future tenant behaviour changes.
+      expect(
+        isPermanentRefreshFailure(axiosError(
+          403,
+          { error: 'temporarily_blocked' },
+          { 'retry-after': '30' },
+        )),
+      ).toBe(false);
+    });
+
+    it('returns false for HTTP 400 with a Retry-After header (transient)', () => {
+      // Same edge case at the OAuth-canonical status.
+      expect(
+        isPermanentRefreshFailure(axiosError(
+          400,
+          { error: 'invalid_grant' },
+          { 'retry-after': '60' },
+        )),
+      ).toBe(false);
+    });
+
+    it('honours a numeric Retry-After value of 0 as a no-op signal', () => {
+      // RFC 7231 allows retry-after=0 (try again immediately). The
+      // presence of the header alone signals "transient", so the
+      // predicate must classify this as recoverable. The fetch loop's
+      // decideRetry decides the *delay*; this predicate decides *whether
+      // to delete the token*.
+      expect(
+        isPermanentRefreshFailure(axiosError(
+          429,
+          { error: 'rate_limited' },
+          { 'retry-after': '0' },
+        )),
+      ).toBe(false);
     });
 
     it('returns false for ECONNRESET (transport failure)', () => {
@@ -132,8 +217,12 @@ describe('isPermanentRefreshFailure', () => {
       expect(isPermanentRefreshFailure(42)).toBe(false);
     });
 
-    it('returns false for an error-like object with response but no data', () => {
-      expect(isPermanentRefreshFailure({ response: { status: 400 } })).toBe(false);
+    it('returns false for an error-like object with response but no status', () => {
+      expect(isPermanentRefreshFailure({ response: { data: { error: 'x' } } })).toBe(false);
+    });
+
+    it('returns false for an error-like object with response but a non-numeric status', () => {
+      expect(isPermanentRefreshFailure({ response: { status: 'bad', data: {} } })).toBe(false);
     });
   });
 });

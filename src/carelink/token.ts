@@ -143,19 +143,43 @@ export function isTokenExpired(accessToken: string): boolean {
 export async function refreshToken(loginData: LoginData): Promise<LoginData> {
   logger.info('Refreshing access token...', { component: 'token' });
 
-  const resp = await axios.post(
-    loginData.token_url,
-    qs.stringify({
-      grant_type: 'refresh_token',
-      client_id: loginData.client_id,
-      refresh_token: loginData.refresh_token,
-    }),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
-  );
+  // On non-2xx we want enough context to diagnose Auth0 failures later
+  // (issue #65: Auth0 has been seen returning an empty body with HTTP
+  // 403 when the refresh token is revoked out-of-band by the CareLink
+  // phone app). Axios throws on non-2xx, so the catch below logs status
+  // + body before rethrowing so the caller — and operator reading the
+  // bridge logs — can tell permanent-auth-failure apart from
+  // transport-flapping without re-running the failing request.
+  let data;
+  try {
+    const resp = await axios.post(
+      loginData.token_url,
+      qs.stringify({
+        grant_type: 'refresh_token',
+        client_id: loginData.client_id,
+        refresh_token: loginData.refresh_token,
+      }),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+    );
+    data = resp.data;
+  } catch (e) {
+    const err = e as { response?: { status?: unknown; data?: unknown }; message?: string };
+    const status = err.response?.status;
+    const responseBody = err.response?.data;
+    logger.error('Refresh token request failed', {
+      component: 'token',
+      status: typeof status === 'number' ? status : 'no-response',
+      token_url: loginData.token_url,
+      has_response: Boolean(err.response),
+      response_body: responseBody,
+      error_message: err.message,
+    });
+    throw e;
+  }
 
-  loginData.access_token = resp.data.access_token;
-  if (resp.data.refresh_token) {
-    loginData.refresh_token = resp.data.refresh_token;
+  loginData.access_token = data.access_token;
+  if (data.refresh_token) {
+    loginData.refresh_token = data.refresh_token;
   }
 
   logger.info('Token refreshed successfully', { component: 'token' });
