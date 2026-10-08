@@ -15,6 +15,7 @@ way the official CareLink app does and uploading what it gets.
 > Original code by [@domien-f](https://github.com/domien-f).
 > Maintained by [NovaLux12](https://github.com/NovaLux12) while
 > upstream is quiet. PRs and issues welcome here.
+> Part of [Loopwise Health](https://loopwise.uk) — open diabetes infrastructure.
 >
 > This fork includes the BLE device detection fix from
 > [upstream PR #2](https://github.com/domien-f/carelink-bridge/pull/2)
