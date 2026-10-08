@@ -4,6 +4,8 @@
 [![Latest release](https://img.shields.io/github/v/release/NovaLux12/carelink-bridge)](https://github.com/NovaLux12/carelink-bridge/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> **Part of [Loopwise Health](https://loopwise.uk)** — open diabetes infrastructure (CareLink bridge, Nightscout MCP, reporting toolkit) plus a Claude-powered layer for briefs, reports, and triage.
+
 Sends your Medtronic pump and CGM data to [Nightscout](http://www.nightscout.info/)
 automatically, by logging into Medtronic's CareLink servers the same
 way the official CareLink app does and uploading what it gets.
@@ -82,3 +84,6 @@ Service. Using it is at your own risk.
 ## License
 
 [MIT](LICENSE)
+
+---
+*Part of [Loopwise Health](https://loopwise.uk) — research and educational tooling only. Not a medical device, not FDA approved, does not recommend insulin doses. Not affiliated with or endorsed by Medtronic.*
