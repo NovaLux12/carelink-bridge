@@ -337,6 +337,7 @@ required — the rest are optional.
 | `MMCONNECT_SERVER` | `EU` | Set to `US` if you're in the United States |
 | `MMCONNECT_COUNTRYCODE` | `gb` | Your country code (e.g. `us`, `de`, `nl`) |
 | `MMCONNECT_LANGCODE` | `en` | Your language code |
+| `MMCONNECT_SERVERNAME` | *(empty)* | Pins the CareLink hostname explicitly instead of the EU/US default. Leave blank unless you know you need it. An unrecognised value keeps the single-host behaviour. |
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_SGV_LIMIT` | `24` | How many SGV entries to upload per fetch |
 | `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |

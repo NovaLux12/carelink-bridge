@@ -235,7 +235,8 @@ export class CareLinkClient {
     // Check if patient has a BLE device by fetching monitor data first
     try {
       const monitorResp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
-      if (monitorResp.data && this.isBleDevice(monitorResp.data.deviceFamily || monitorResp.data.medicalDeviceFamily)) {
+      const { family, model } = deviceIdentity(monitorResp.data);
+      if (monitorResp.data && this.isBleDevice(family, model)) {
         logger.log('BLE device detected for carepartner, using BLE endpoint');
         return this.fetchBleDeviceData(patientId, 'carepartner');
       }
@@ -280,8 +281,8 @@ export class CareLinkClient {
     throw new Error('All carepartner data endpoints failed');
   }
 
-  private isBleDevice(deviceFamily: string | undefined): boolean {
-    return isBleDevice(deviceFamily);
+  private isBleDevice(deviceFamily: string | undefined, deviceModel?: string): boolean {
+    return isBleDevice(deviceFamily, deviceModel);
   }
 
   private async fetchBleDeviceData(patientId?: string, role: string = 'patient'): Promise<CareLinkData> {
@@ -327,8 +328,9 @@ export class CareLinkClient {
     // Try the monitor endpoint first (works for 7xxG pumps)
     try {
       const resp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
+      const { family, model } = deviceIdentity(resp.data);
 
-      if (resp.data && this.isBleDevice(resp.data.deviceFamily || resp.data.medicalDeviceFamily)) {
+      if (resp.data && this.isBleDevice(family, model)) {
         logger.log('BLE device detected, using BLE endpoint');
         return this.fetchBleDeviceData(this.accountUsername());
       }
@@ -341,11 +343,80 @@ export class CareLinkClient {
       // Fall through to legacy endpoint
     }
 
-    // Fall back to legacy connect endpoint
-    const url = this.urls.connectData(Date.now());
-    const resp = await this.axiosInstance.get<CareLinkData>(url);
-    logger.log('GET data', url);
-    return resp.data;
+    // Fall back to the legacy connect endpoint
+    return this.fetchConnectData();
+  }
+
+  /**
+   * Legacy `patient/connect/data` fetch, with both CareLink data hosts tried
+   * in turn (issue #74).
+   *
+   * The carelink host and the clcloud host both serve this path — only the
+   * carelink host was ever tried. See the host-split note on
+   * `dataHostCandidates()` in carelink/urls.ts for the probe table and for
+   * how much of the "non-US accounts need clcloud" claim is verified.
+   *
+   * Mirrors buildEndpointCandidates()' version fallback in
+   * fetchAsCarepartner(): first candidate that yields data wins, everything
+   * else is logged and stepped over. Two deliberate differences:
+   *
+   * - An empty body does NOT count as success. A host that no longer serves
+   *   the endpoint answers 200 with nothing in it, which is indistinguishable
+   *   from a working fetch unless you look — the very failure mode this is
+   *   meant to catch.
+   * - A candidate that errors does not abort the loop. The error from the
+   *   configured host is re-thrown if every candidate fails, so fetch()'s
+   *   retry policy sees the same failure it always did.
+   *
+   * If every candidate comes back empty, the first empty body is returned
+   * rather than an error: that is what the single-host version did, and a
+   * genuinely empty CareLink payload is a real (if useless) answer, not a
+   * transport failure. (The degenerate case — a 200 whose body parses to
+   * `undefined` — is NOT preserved as-is: it used to return undefined and
+   * blow up downstream, now it gets a named error.)
+   */
+  private async fetchConnectData(): Promise<CareLinkData> {
+    const candidates = this.urls.connectDataCandidates(Date.now());
+
+    let emptyBody: CareLinkData | undefined;
+    let emptyFromSibling = false;
+    let firstError: unknown;
+
+    for (const url of candidates) {
+      const isConfiguredHost = url === candidates[0];
+      try {
+        const resp = await this.axiosInstance.get<CareLinkData>(url);
+        if (resp.status === 200 && hasPayload(resp.data)) {
+          logger.log('GET data', url);
+          return resp.data;
+        }
+        logger.log(
+          candidates.length > 1
+            ? 'connect/data returned no payload — trying the other data host'
+            : 'connect/data returned no payload',
+          url,
+        );
+        // Remember WHERE the empty body came from. Pre-#74 behaviour was: one
+        // candidate, whatever it returned was the answer. We may only fall
+        // back to an empty body when doing so preserves that. If the
+        // configured host errored and only the *sibling* answered empty,
+        // returning that body would convert a recorded failure into a false
+        // success — fetch() would record a success, skip forceRefresh on a
+        // 401, and report "no data" while CareLink was in fact erroring.
+        if (emptyBody === undefined) {
+          emptyBody = resp.data;
+          emptyFromSibling = !isConfiguredHost;
+        }
+      } catch (e) {
+        firstError ??= e;
+        logger.log('connect/data failed:', url);
+      }
+    }
+
+    if (emptyBody !== undefined && (firstError === undefined || !emptyFromSibling)) {
+      return emptyBody;
+    }
+    throw firstError ?? new Error('All connect/data endpoints failed');
   }
 
   private throwAndRecord(e: unknown): never {
@@ -448,19 +519,155 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Determines whether a CareLink device family string indicates a BLE device
- * (780G, Guardian 4, Simplera, etc.). Exported at module level so the
- * helper can be unit-tested without spinning up a CareLinkClient.
+ * Pulls the device-identity fields out of a CareLink data response, in the
+ * order Medtronic's own portal resolves them.
+ *
+ * The response shape varies by endpoint generation: `monitor/data` returns
+ * the family as `deviceFamily`, older endpoints as `medicalDeviceFamily`;
+ * the model number arrives as `deviceModel` or `sensorModel` (the portal
+ * resolver prefers `deviceModel`, then falls back to `sensorModel`).
+ *
+ * `CareLinkData` declares only the two family fields — the model fields fall
+ * through to its index signature as `unknown`, and a partial payload can
+ * carry `null` or a number where a string belongs. Narrowing in one place
+ * keeps the call sites cast-free and sends isBleDevice() either a non-empty
+ * string or `undefined`, both of which it already handles.
+ */
+function deviceIdentity(
+  data: CareLinkData | undefined,
+): { family: string | undefined; model: string | undefined } {
+  const raw = (data ?? {}) as Record<string, unknown>;
+  const pick = (key: string): string | undefined => {
+    const value = raw[key];
+    return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+  };
+  return {
+    family: pick('deviceFamily') ?? pick('medicalDeviceFamily'),
+    model: pick('deviceModel') ?? pick('sensorModel'),
+  };
+}
+
+/**
+ * Whether a data response actually carries a payload.
+ *
+ * A host that no longer serves an endpoint answers `200` with an empty body
+ * — axios surfaces that as `{}` or `""`, not as an error. Without this check
+ * the legacy fallback could "succeed" with nothing in it, which is the exact
+ * silent-empty-fetch failure issue #74 is about.
+ *
+ * Only a non-empty object counts. A sibling host answering 200 with an
+ * HTML/plain-text body or a JSON scalar is not CareLink data, and accepting
+ * it would hand a non-object to `transform()` — so non-object bodies are
+ * payload-less here, not just empty ones.
+ */
+function hasPayload(data: unknown): boolean {
+  if (typeof data === 'object' && data !== null) return Object.keys(data).length > 0;
+  return false;
+}
+
+/**
+ * Determines whether a CareLink device identifies as a BLE / standalone-CGM
+ * device (780G, Guardian 4, Simplera, Instinct, Guardian Connect…). Exported
+ * at module level so the helper can be unit-tested without spinning up a
+ * CareLinkClient.
  *
  * The patient `monitor/data` endpoint returns the family under `deviceFamily`,
  * while older endpoints use `medicalDeviceFamily`. The fix from upstream
  * PR #2 (https://github.com/domien-f/carelink-bridge/pull/2) made the call
  * sites pass `deviceFamily || medicalDeviceFamily` so BLE detection works
  * for both shapes.
+ *
+ * ---
+ *
+ * Two additional inputs matter, found during the 2026-10-08 reverse-engineering
+ * pass (research notes: research/probe-2026-10-08/APP-EMULATION-RESEARCH.md):
+ *
+ * 1. **Medtronic's own portal defines its device-family value as
+ *    `SIMPLERA_SYSTEM = "Simplera™ system"` — mixed case.** JavaScript's
+ *    `String.includes()` is case-sensitive, so the previous
+ *    `includes('SIMPLERA')` returned `false` for that exact string and BLE
+ *    detection silently failed. Matching is now normalised (uppercased,
+ *    non-alphanumerics stripped) so `"Simplera™ system"`, `"SIMPLERA_SYSTEM"`
+ *    and `"simplera"` all match. See issue #73.
+ *
+ * 2. **Medtronic's portal resolver prefers `deviceModel`, then `sensorModel`,
+ *    and treats `"NO_SENSOR"` as a sentinel.** The API returns those fields
+ *    alongside the family strings, and the bridge previously ignored both.
+ *    They are accepted as an optional second argument.
+ *
+ * The model prefixes below are an *offline heuristic*, transcribed from
+ * Medtronic's published device table. Medtronic also serves a live
+ * `deviceModelMapping` / `deviceToFamilyMapping` config to their own client,
+ * so the authoritative source is server-side; treat this table as a fallback
+ * for when only the family/model string is available. Whether the wire value
+ * actually arrives as a display string or an enum key is unverified (needs a
+ * real CareLink token), which is exactly why the match is deliberately lenient.
  */
-export function isBleDevice(deviceFamily: string | undefined): boolean {
-  if (!deviceFamily) return false;
-  return deviceFamily.includes('BLE') || deviceFamily.includes('SIMPLERA');
+
+/** Device-model prefixes known to be BLE / standalone-CGM families. */
+const BLE_DEVICE_MODELS: readonly string[] = [
+  // --- Pumps that pair to the CareLink app over BLE ---
+  'MMT1884', // 780G (incl. MMT-1884XCU / XCE / XCF)
+  'MMT1885', // 780G
+  'MMT1886', // 780G (incl. MMT-1886XCE / XCF)
+
+  // --- Standalone CGM sensors ---
+  'MMT7841',  // Guardian 4 Sensor
+  'MMT5120',  // Simplera Sync
+  'MMT5420',  // Instinct Sensor
+  'CSS7200',  // Guardian Connect
+  'CSS7201',  // Guardian Connect
+
+  // --- Standalone CGM *systems* (INFERRED from Medtronic's portal bundle,
+  //     NOT a wire observation). Issue #73 asked for these. The Guardian 4
+  //     System and Simplera System rows are unambiguously BLE-paired devices,
+  //     so treating the Sensor but not the System would be internally
+  //     inconsistent. Verified only as entries in Medtronic's published
+  //     device table; which shape the CareLink API actually returns is
+  //     UNVERIFIED without a token.
+  'GM4SNAPSHOT', // guardian-4 snapshot sentinel, as published
+  'MMT8200',     // Guardian 4 system
+  'MMT8201',     // Guardian 4 system
+  'MMT6500',     // Simplera system
+  'MMT6501',     // Simplera system
+  'MMT8400',     // Simplera system
+  'MMT8401',     // Simplera system
+
+  // --- Instinct sensor / Go SKU family ---
+  'SKU78893', 'SKU78953', 'SKU78955', 'SKU78957', 'SKU78959', 'SKU78960',
+  'SKU78954', 'SKU78956', 'SKU78958',
+];
+
+/** Sentinel the API uses for "no sensor attached". */
+const NO_SENSOR = 'NOSENSOR';
+
+/** Uppercase and strip non-alphanumerics, so "Simplera™ system" -> "SIMPLERASYSTEM". */
+function normalise(value: string | undefined): string {
+  return (value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+export function isBleDevice(deviceFamily?: string, deviceModel?: string): boolean {
+  const family = normalise(deviceFamily);
+  const model = normalise(deviceModel);
+
+  if (family && family !== NO_SENSOR) {
+    // Prefix match, not a substring. Deliberate: after normalising, a plain
+    // includes('BLE') would also match 'ENABLE', 'DOUBLE' and 'TABLE'.
+    // Every family value Medtronic has been observed to send — 'BLE_MINIMED',
+    // 'BLE_PUMP', 'SIMPLERA', 'SIMPLERA_SYSTEM', "Simplera™ system" — and all
+    // of them start with the token, so prefix covers them without that risk.
+    // Residual risk, stated not fixed: the matcher's input is UNVERIFIED (see
+    // above), so a future spelling with the BLE token anywhere but leading
+    // position is a silent false-negative — the price of the prefix form,
+    // accepted because every observed spelling leads with the token.
+    if (family.startsWith('BLE') || family.startsWith('SIMPLERA')) return true;
+  }
+
+  if (model && model !== NO_SENSOR) {
+    if (BLE_DEVICE_MODELS.some((prefix) => model.startsWith(prefix))) return true;
+  }
+
+  return false;
 }
 
 /**
