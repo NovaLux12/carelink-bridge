@@ -45,6 +45,9 @@ export interface NightscoutDeviceStatus {
     conduitMedicalDeviceInRange: boolean;
     conduitSensorInRange: boolean;
     medicalDeviceBatteryLevelPercent?: number;
+    // Raw pump-reported battery, passed through alongside the medical-device
+    // value (#82). Optional: absent on older devices.
+    pumpBatteryLevelPercent?: number;
     medicalDeviceFamily?: string;
   };
 }

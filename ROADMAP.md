@@ -146,7 +146,7 @@ observability, and attack-surface reduction.
 current maintenance window. The 780G-payload-fixture items
 (`markers[]` for treatments, `therapyAlgorithmState` for
 auto-mode, `limits[]` schedule, multi-patient fan-out,
-`reservoirLevelPercent` snap-points, NGP-tier alarm codes)
+NGP-tier alarm codes)
 are deferred until a real pump arrives (currently expected
 November 2026) or another operator contributes sanitised
 fixtures. The token-permission and atomic-write fixes
@@ -189,8 +189,11 @@ deferred items above:
 | `markers[]` for treatments | `BOLUS_WIZARD_FOOD_BOLUS` or `LOGBOOK` |
 | `therapyAlgorithmState` (auto-mode) | `ASSESSMENT_AND_PROGRESS` / `DEVICE_SETTINGS` |
 | `limits[]` schedule | `DEVICE_SETTINGS` / `SettingsHistory` |
-| `reservoirLevelPercent` | `DAILY_DETAILS` / `DASHBOARD` |
 | NGP-tier alarm codes | `EPISODE_SUMMARY` |
+
+(`reservoirLevelPercent` was in this table; it is now typed on `CareLinkData`
+with the units-fields-win decision recorded in `src/transform/index.ts` — no
+longer deferred.)
 
 **NOT YET ACHIEVED. NOT INTEGRATED. NOT REACHABLE WITHOUT A
 TOKEN** — the host resolves and is gateway-gated (403

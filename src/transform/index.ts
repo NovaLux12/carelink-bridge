@@ -49,6 +49,17 @@ function deviceName(data: CareLinkData): string {
   return 'connect-' + data.medicalDeviceFamily.toLowerCase();
 }
 
+/**
+ * Device battery level, preferring the pump-reported value (#82). The
+ * reference client reads `pumpBatteryLevelPercent` first and falls back to
+ * `medicalDeviceBatteryLevelPercent` only when the former is 0 or absent, so
+ * a device reporting only the new field does not surface as 0% battery.
+ * `||` (not `??`) mirrors that: 0 means "not reported" here.
+ */
+function deviceBatteryPercent(data: CareLinkData): number {
+  return data.pumpBatteryLevelPercent || data.medicalDeviceBatteryLevelPercent;
+}
+
 function deviceStatusEntry(
   data: CareLinkData,
   offset: string,
@@ -69,7 +80,7 @@ function deviceStatusEntry(
       created_at: timestampAsString(data.lastMedicalDeviceDataUpdateServerTime),
       device: deviceName(data),
       uploader: {
-        battery: data.medicalDeviceBatteryLevelPercent,
+        battery: deviceBatteryPercent(data),
       },
       last_alarm: lastAlarm,
 
@@ -83,6 +94,7 @@ function deviceStatusEntry(
         conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
         conduitSensorInRange: data.conduitSensorInRange,
         medicalDeviceBatteryLevelPercent: data.medicalDeviceBatteryLevelPercent,
+        pumpBatteryLevelPercent: data.pumpBatteryLevelPercent,
         medicalDeviceFamily: data.medicalDeviceFamily,
       },
     };
@@ -98,7 +110,10 @@ function deviceStatusEntry(
 
 
     pump: {
-      battery: { percent: data.medicalDeviceBatteryLevelPercent },
+      battery: { percent: deviceBatteryPercent(data) },
+      // Units fields win over reservoirLevelPercent (#83): the percent is
+      // quantised and the units are rounded, so they can disagree slightly,
+      // and downstream looping clients read the units value.
       reservoir: data.reservoirRemainingUnits ?? data.reservoirAmount,
       iob: {
         timestamp: timestampAsString(data.lastMedicalDeviceDataUpdateServerTime),
@@ -118,6 +133,8 @@ function deviceStatusEntry(
       conduitInRange: data.conduitInRange,
       conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
       conduitSensorInRange: data.conduitSensorInRange,
+      medicalDeviceBatteryLevelPercent: data.medicalDeviceBatteryLevelPercent,
+      pumpBatteryLevelPercent: data.pumpBatteryLevelPercent,
     },
   };
 }

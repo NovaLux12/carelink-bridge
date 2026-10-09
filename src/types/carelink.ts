@@ -4,6 +4,13 @@ export interface CareLinkSG {
   version: number;
   timeChange: boolean;
   kind: 'SG';
+  // Per-reading fields from the RecentData payload (#85). sensorState lets a
+  // warm-up or calibration-required reading be distinguished from a normal
+  // one; relativeOffset is per-reading offset data and the natural input for
+  // the whole-hour pump-offset rounding (kept separate from the timestamp
+  // semantics — see src/transform/pump-offset.ts).
+  sensorState?: string;
+  relativeOffset?: number;
 }
 
 export interface CareLinkActiveInsulin {
@@ -32,6 +39,12 @@ export interface CareLinkData {
   medicalDeviceFamily: string;
   deviceFamily?: string;
   medicalDeviceBatteryLevelPercent: number;
+  // Newer NGP-tier pumps report this instead of (or alongside)
+  // medicalDeviceBatteryLevelPercent (#82). The reference client prefers it
+  // and falls back only when it is 0; this bridge mirrors that precedence
+  // (see deviceBatteryPercent() in src/transform/index.ts). INFERRED from
+  // the reference client's model — unverified on the wire.
+  pumpBatteryLevelPercent?: number;
   conduitBatteryLevel: number;
   conduitBatteryStatus: string;
   conduitInRange: boolean;
@@ -43,6 +56,13 @@ export interface CareLinkData {
   timeToNextCalibHours: number;
   reservoirRemainingUnits?: number;
   reservoirAmount?: number;
+  // Percent form of the reservoir, alongside the two units fields (#83).
+  // Present in the payload schema; typed here so it is available. The
+  // Nightscout `pump.reservoir` output deliberately keeps using the units
+  // fields (see below) — the percent is quantised and the units are rounded,
+  // so they can disagree slightly, and downstream looping clients read the
+  // units value.
+  reservoirLevelPercent?: number;
   activeInsulin?: CareLinkActiveInsulin;
   lastAlarm?: CareLinkAlarm;
   bgUnits?: string;
