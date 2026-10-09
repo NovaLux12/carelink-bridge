@@ -47,7 +47,7 @@ src/
 ├── login-errors.ts          # Named error class for missing Auth0 config
 ├── filter.ts                # Recency filter — only upload new entries
 ├── last-alarm.ts            # CareLink alarm → Nightscout annotation
-├── logger.ts                # Structured logger: pretty (default) or json (LOG_FORMAT=json), no PII
+├── logger.ts                # Structured logger: pretty (default) or json (LOG_FORMAT=json); redacts credential-looking field KEYS
 ├── metrics.ts               # Prometheus counters/gauges + renderPrometheus() (incl. carelink_circuit_open)
 ├── observe-server.ts        # Opt-in loopback /healthz + /metrics server (node:http, CARELINK_METRICS_PORT)
 ├── refresh-failure.ts       # Classify Auth0 refresh failures (recoverable vs permanent)
@@ -800,7 +800,8 @@ limits schedule, NGP-tier alarm codes) are tracked in
    should reference the bug in the test name or in a comment.
 4. The test must be deterministic. No real network, no real
    filesystem outside the temp dir, no real timers.
-5. Run `npm test` and `npx tsc --noEmit` to verify.
+5. Run `npm test` and `npm run typecheck` to verify. (`npx tsc --noEmit`
+   alone does **not** cover `test/` — see #87.)
 
 ## How to add a new feature
 

@@ -24,7 +24,8 @@ dependency), write an ADR in `docs/adr/` first. The
    fixes don't need an issue).
 2. Fork the repo, create a branch.
 3. Make the change.
-4. Make sure `npm test` and `npx tsc --noEmit` pass.
+4. Make sure `npm test` and `npm run typecheck` pass. (`npx tsc --noEmit`
+   on its own does not typecheck test files — use the script.)
 5. Open a PR against `main`. CI runs on Node 20 and 22.
 6. Wait for review. We'll try to respond within a week.
 
