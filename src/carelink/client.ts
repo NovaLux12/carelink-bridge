@@ -611,6 +611,18 @@ const BLE_DEVICE_MODELS: readonly string[] = [
   'MMT1885', // 780G
   'MMT1886', // 780G (incl. MMT-1886XCE / XCF)
 
+  // --- Minimed Flex (INFERRED from Medtronic's portal bundle, NOT a wire
+  //     observation — issue #91). The Flex (MMT-8062/8063/8082-8085,
+  //     "Minimed Flex", minValue 50) is already shipping: upstream
+  //     domien-f/carelink-bridge#3 reports silent zero-data fetch after a
+  //     780G-to-Flex upgrade, the exact failure mode of undetected BLE.
+  'MMT8062', // Minimed Flex
+  'MMT8063', // Minimed Flex
+  'MMT8082', // Minimed Flex
+  'MMT8083', // Minimed Flex
+  'MMT8084', // Minimed Flex
+  'MMT8085', // Minimed Flex
+
   // --- Standalone CGM sensors ---
   'MMT7841',  // Guardian 4 Sensor
   'MMT5120',  // Simplera Sync
@@ -661,6 +673,14 @@ export function isBleDevice(deviceFamily?: string, deviceModel?: string): boolea
     // position is a silent false-negative — the price of the prefix form,
     // accepted because every observed spelling leads with the token.
     if (family.startsWith('BLE') || family.startsWith('SIMPLERA')) return true;
+    // Substring, deliberately — but only for this one token (#91). Unlike
+    // 'BLE' (a substring of ENABLE, DOUBLE, TABLE), 'FLEX' is not a substring
+    // of any other known family value (GUARDIAN, NGP, CGM, CC, PARADIGM,
+    // BLE_*, SIMPLERA*, MINIMEDFLEX), audited 2026-10-09. The Flex's family
+    // spelling is UNVERIFIED — "Minimed Flex" does not lead with a known
+    // token, so prefix matching cannot cover it. Revisit if a non-Flex
+    // family containing FLEX ever appears.
+    if (family.includes('FLEX')) return true;
   }
 
   if (model && model !== NO_SENSOR) {

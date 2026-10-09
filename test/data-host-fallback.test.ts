@@ -311,6 +311,38 @@ describe('isBleDevice() call sites in the fetch paths', () => {
     expect(connectCalls()).toEqual([]);
   });
 
+  it('routes a Minimed Flex payload to the BLE endpoint (#91)', async () => {
+    // The exact upstream failure (domien-f/carelink-bridge#3): a Flex account
+    // fetched "Success" with zero data because the family string matched
+    // nothing. Family-only identification here — the hardest case, no model.
+    axiosInstance.get.mockImplementation(async (url: string) => {
+      if (url.includes('/users/me')) {
+        return { status: 200, data: { role: 'PATIENT', username: 'real-user', id: 'patient-id' } };
+      }
+      if (url.includes('/monitor/data')) {
+        return {
+          status: 200,
+          data: { deviceFamily: 'Minimed Flex', sensorState: 'NORMAL' },
+        };
+      }
+      if (url.includes('/countries/settings')) {
+        return {
+          status: 200,
+          data: { blePereodicDataEndpoint: 'https://clcloud.example/connect/carepartner/v6/display/message' },
+        };
+      }
+      throw new Error('unexpected url: ' + url);
+    });
+    const bleData = { deviceFamily: 'Minimed Flex', sgs: [] };
+    axiosInstance.post.mockResolvedValue({ status: 200, data: bleData });
+
+    await expect(euClient().fetch()).resolves.toEqual(bleData);
+    expect(axiosInstance.post).toHaveBeenCalledTimes(1);
+    // The legacy connect/data path must never be touched for a Flex device —
+    // that is the route that returns {} and produces the silent zero-data fetch.
+    expect(connectCalls()).toEqual([]);
+  });
+
   it('routes to the BLE endpoint when only sensorModel is present', async () => {
     axiosInstance.get.mockImplementation(async (url: string) => {
       if (url.includes('/users/me')) {
