@@ -85,6 +85,30 @@ record, not reconstructed.
   silent by default — documented, not removed.
 
 
+### Payload-schema typings (#82, #83, #85)
+
+Three fields the `RecentData` payload carries, taken from the reference
+client's model classes (**INFERRED** from third-party source — unverified
+on the wire):
+
+- [#82] — `pumpBatteryLevelPercent`: the transform now prefers it over
+  `medicalDeviceBatteryLevelPercent`, falling back only when it is 0 or
+  absent (mirroring the reference client's `getDeviceBatteryLevel()`).
+  Previously a device reporting only the new field surfaced 0% battery.
+  Older devices sending only the medical-device field are unchanged.
+  Both values are also passed through on the `connect` mirror.
+- [#83] — `reservoirLevelPercent`: typed on `CareLinkData`. The Nightscout
+  `pump.reservoir` output deliberately keeps using the units fields
+  (`reservoirRemainingUnits ?? reservoirAmount`), because the percent is
+  quantised, the units are rounded, and downstream looping clients read
+  the units value. Removed from the ROADMAP's pump-gated deferred list:
+  the blocker was a missing type, not a missing pump.
+- [#85] — `sensorState` and `relativeOffset` typed per-reading on
+  `CareLinkSG`. Typing only: the transform does not consume them yet, and
+  SGV timestamp semantics are unchanged. `relativeOffset` is recorded as
+  the natural input for the whole-hour pump-offset rounding — that
+  investigation is a separate change, not this one.
+
 ### 2026-10-08/09 research pass (previous entry, retained)
 
 A research pass into CareLink's live API surface, followed by the fixes
