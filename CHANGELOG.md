@@ -10,6 +10,224 @@ Entries before v0.1.0 describe the upstream history this fork carries.
 Written retroactively on 2026-07-19; dates are taken from the git/tag/release
 record, not reconstructed.
 
+## [Unreleased]
+
+A research pass into CareLink's live API surface, followed by the fixes
+it produced. The branch is one squashed commit carrying both the code and
+the documentation changes, so this entry covers both.
+
+Every CareLink fact below was verified live on 2026-10-08 unless it is
+labelled **INFERRED** (from a third-party client or Medtronic's own
+published assets) or **UNVERIFIED** (needs a real CareLink credential).
+For orientation, the code changes this pass produced, one line each:
+
+- [#73] — case-insensitive, normalised BLE family matching that also
+  reads `deviceModel` / `sensorModel`, with the portal's model table
+  documented as an offline fallback.
+- [#74] — dual data-host fallback for the legacy `connect/data`
+  endpoint: configured host first, sibling second, the first 200 with a
+  non-empty body wins, and the configured host's error is re-thrown when
+  every candidate fails.
+- [#75] — the discovery pin guard now gates on the cumulus track rather
+  than on the mere presence of the `Auth0SSOConfiguration` key, and fails
+  closed when `baseUrlCumulus` is absent.
+- [#77] — the `certificates[]` change tripwire plus the header
+  documentation. Recording and asserting the live `x-cum-signature` value
+  is **deliberately deferred** — see
+  [ADR 0002](./docs/adr/0002-discovery-app-version-pin.md).
+
+Behaviour changes in this pass, stated plainly (both are intended and
+tested — "nothing changes" holds only for configurations that return
+data, which are byte-identical):
+
+- **CP entries without `baseUrlCumulus` now fail closed at discovery.**
+  `selectAuth0ConfigUrl()` throws `NoAuth0SSOConfigurationError` instead
+  of resolving the URL when the entry carries no (or a non-string)
+  `baseUrlCumulus`. No live probed document does this — the field is
+  present on every document probed (android/1.0 … 10.0, both hosts,
+  VERIFIED live 2026-10-09) — so this changes nothing that returns data
+  today, and turns a future shape change into a named error instead of a
+  silent resolve. ([#75])
+- **A configuration that returns an empty body now spends one extra
+  request on the sibling host.** A configuration that returns data is
+  unchanged (exactly one request, sibling untouched); when the
+  configured host answers `200 + {}` — exactly what
+  `msgType=last24hours` returns for a pump with no data in 24h — the
+  legacy branch now tries the sibling host before answering. ([#74])
+
+What follows is what the probe established and where it is now written
+down.
+
+The CareLink facts below come from a read-only, unauthenticated, low-rate
+probe (~500 requests, no credentials, nothing written to Medtronic) — the
+2026-10-08 sweep, which is what "verified live" refers to. "401 / 403"
+means *the path exists*; that is all a token-less probe can establish.
+A few statements rest instead on Medtronic's public portal bundle, on a
+third-party client, or on the 2026-10-09 re-probe, and those are labelled
+**INFERRED** / **UNVERIFIED** or re-dated where they appear.
+
+### Changed
+
+- **Discovery version matrix corrected** — the matrix in
+  `src/discovery.ts` and
+  [ADR 0002](./docs/adr/0002-discovery-app-version-pin.md) was a partial
+  subset recorded 2026-07-19. The live matrix is **23 cells, all HTTP
+  200**, and the enumeration is **open-ended** (`android/10.0` still
+  returns 200), so the table is a snapshot rather than a bounded set.
+  `android/3.5` now returns
+  `UseSSOConfiguration=Auth0SSOConfiguration` but sits on cumulus
+  **v11** — a near miss, not a fallback. `android/3.1` is cumulus
+  **v6**, a track nobody had recorded. `android/3.9` and `3.10` are new
+  cells. **3.6 / 3.7 / 3.8 remain the only cells that are Auth0 *and*
+  cumulus v13**, so the `android/3.6` pin is unchanged and still
+  correct. ([#78])
+
+- **The discovery URL documented as two orthogonal axes** —
+  `/connect/carepartner/{basePath}/discover/android/{version}` varies on
+  the base path (which **tenant**) and the app version (which
+  **cumulus**) independently. `v11` is not "an older API": it serves the
+  **trials** tenant, with all three regions (US, EU, CLINICAL) pointing
+  at `*-trials` hosts and `baseUrlCumulus` at `…trials…/v13` for every
+  region. `v13` is the patient API; `v12` is 401 and `v14`–`v20` are 403.
+  The eu/com split in `buildDiscoveryUrl()` is recorded as
+  **effectively cosmetic**, because `clcloud.minimed.eu`, `.com` *and*
+  `clcloud-trials.minimed.com` return a byte-identical document (same
+  sha256, differing only in the `x-cum-signature` header) that carries
+  all three regions — `login.ts` picks one by `region`. ([#78])
+
+- **ADR 0002's "What reverses it" rewritten, and the guard it asked for
+  now exists** — a guard that checks only the presence of the
+  `Auth0SSOConfiguration` key is a **silent pass**: the selector exists
+  on `android/3.5`, which is a v11 cell and therefore unusable, so
+  bumping the pin onto it produced a healthy-looking login and a nameless
+  failure at the data call ([#75]). Any guard, comment, or test that
+  protects the pin must also check the **cumulus track** —
+  `baseUrlCumulus` **ending in** `/connect/carepartner/v13`; a substring
+  check on `/v13` would admit `.../v131` — not merely the presence of the
+  config key.
+  `selectAuth0ConfigUrl()` in `src/login-errors.ts` now asserts the v13
+  track and fails closed when `baseUrlCumulus` is absent. ([#78], [#75])
+
+- **Live CareLink API surface documented** in
+  [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface)
+  — host families (which are the patient API, which are not), the
+  metadata-vs-data host split, and the three live namespaces.
+  `carelink.*` serves the `/patient/*` metadata; `clcloud.*` serves the
+  `/connect/carepartner/*` data and answers 403 for most `/patient/*`
+  paths; `commoncore.medtronic.{eu,com}` is the **reports** API on
+  **`medtronic.eu`, not `minimed.eu`** — which is why sweeps limited to
+  `*.minimed.*` never found it. `carelinkhp.minimed.eu` is an Angular
+  SPA, not an API; `commoncore.minimed.*` is a *different* host and
+  currently 502. ([#78])
+
+- **Region naming documented as three-way** — the discovery `CP[]`
+  entries say `EU`, country-settings says `OUS`, and the SSO
+  `client.audience` says `carepartner.patient.ous`. Three names, one
+  tenant. `MMCONNECT_SERVER=EU` and `resolveServerName()` match the
+  discovery naming, which is consistent but easy to miss. ([#78])
+
+- **README disclaimer tightened** — the intro no longer claims the bridge
+  logs in "the same way the official CareLink app does". That holds for
+  the **data** leg only: the official app's identity leg is
+  `/api/carepartner/v2/*` (the `baseUrlCareLink` its own discovery
+  document declares), while this bridge calls bare `/patient/*`. Both
+  answer 401 unauthenticated, so which one returns data with a valid
+  token is **unverified**. ([#78])
+
+- **Unauthenticated `/patient/*` endpoints documented** —
+  `/patient/configuration/system/personal.cp.m2m.enabled` answers 200
+  with no credentials and no headers, on `carelink.*` only (`clcloud.*`
+  403s the same path). Nearby siblings
+  (`…mobileEnabled`, `…device.ble.enabled`, `…uploaderAllowed`,
+  `…cgm.ioxEnabled`) all 404, so it is one exposed key, not a wildcard.
+  The bridge does not call it, and a 401 on it must not be treated as
+  fatal. `/patient/countries/settings` is also public and is already
+  relied on for `blePereodicDataEndpoint`. ([#79])
+
+- **Device identification documented** — the API returns `deviceModel`
+  and `sensorModel` (sentinel `"NO_SENSOR"`) alongside the
+  `deviceFamily` / `medicalDeviceFamily` strings. Only the `*Family`
+  strings reach the Nightscout payload (`src/transform/index.ts`); the
+  model fields are consumed for BLE endpoint selection only.
+  Model-code tables from Medtronic's own portal bundle are recorded as a
+  **fallback** only, because the live `deviceModelMapping` /
+  `deviceToFamilyMapping` is server-driven and must not be hardcoded.
+  **Unverified (vendor bundle, not a wire observation):** the bundle
+  defines `SIMPLERA_SYSTEM = "Simplera™ system"`, a mixed-case display
+  string, so family matching normalises both sides instead of doing a raw
+  `includes()`. ([#78])
+
+- **`/connect/pde/v3/*` is 403, not 401 — a correction of a correction** —
+  the original 2026-10-08 probe returned **403**
+  `{"message":"Missing Authentication Token"}`; the research note then
+  recorded it as 401; and a later review round "corrected"
+  [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) from 403 (right) to
+  401 (wrong) by trusting the note rather than re-probing. **Re-probed
+  twice on 2026-10-09: 403, identical both times.** The distinction is
+  load-bearing for this doc: on `clcloud.*` a 403 with that body is a
+  **gateway-level rejection** (the host does not route the path to a
+  CareLink-app auth check at all), which is a different thing from the
+  app-level **401 `{"error":{"type":"InvalidToken","group":"AUTH"}}`**
+  the bridge's own endpoints return. `/patient/users/me` on `clcloud.*`
+  behaves identically to `pde/v3`. ([#78])
+
+- **Pre-pump watch recorded as unchanged** — all 109 country-settings
+  entries swept: `defaultDevice` is still `GM` in all 108 real
+  countries, `uploaderAllowed` is still true everywhere,
+  `cpMobileAppAvailable` is present in 72/109 with **only AU `true`**,
+  and 37 entries (GB, IE, NZ, SA, KR and others) do not carry the key at
+  all — *unconfigured*, not "not yet available". One of the 109
+  "countries" is `CLINICAL`, a pseudo-region. ([#78])
+
+### Added
+
+- **Reports-API lead for the deferred fixtures** —
+  **NOT YET ACHIEVED. NOT INTEGRATED. Token-gated.**
+  `commoncore.medtronic.{eu,com}` serves CSV + PDF reports over the same
+  account; country-settings advertises 11 `supportedReports` and
+  Medtronic's portal bundle enumerates 14 — the same 11 plus three
+  portal-only types, `PATIENT_DASHBOARD`, `DATA_TABLE` and
+  `SETTINGS_HISTORY` (sources Pump / Sensor /
+  Meter; periods 0/14/30 days and 2–12 months). Recorded as a candidate
+  source for the v0.2.0 deferred 780G fixtures, and if it is ever wired
+  in it must stay **opt-in and off by default**. ([#76])
+- **"Pre-pump authenticated checks" section in [ROADMAP.md](./ROADMAP.md)** —
+  the two cheapest token-bearing checks are `npm run login` end-to-end,
+  then `GET /api/carepartner/v2/users/me` against
+  `GET /patient/users/me` on the same account and token.
+
+### Notes
+
+- **Verified vs inferred, explicitly.** Status codes, the 23-cell
+  matrix, the two-axis base-path behaviour, the byte-identical
+  discovery document, and the country-settings sweep are all
+  **live-verified** 2026-10-08. The device tables, report catalogue and
+  `hcp/*` map come from **Medtronic's own public portal bundle** — a
+  public asset fetched without auth, but not a wire observation. The
+  claim that `clcloud.*/patient/connect/data` is *needed* for EU
+  accounts comes from a **third-party client** (xDrip+ PR #3859) and is
+  labelled **inferred / unverified** everywhere it is used; it is why
+  the sibling host is tried as a *fallback* (configured host first) and
+  not as a switch.
+- A hardcoded key present in the vendor's public bundle is
+  **not reproduced in this repository**; it is tracked privately with
+  the probe notes.
+- Internal-only hostnames found during passive certificate-transparency
+  enumeration are deliberately **not** recorded in this repo — they
+  carry no operational value for this bridge and are reconnaissance
+  data.
+- Two probes, one disagreement, **settled on 2026-10-09**: the
+  2026-10-08 pass recorded the `Auth0SSOConfiguration` key present on
+  every version probed, which was a probe artifact (a `//` fallback
+  returning the truthy string `"-"`). The 2026-10-09 re-probe found the
+  key **absent** on the v2/v11 cells, which carry the legacy
+  `SSOConfiguration` key instead. It does not change the design —
+  `android/3.5` resolves an Auth0 URL on a v11 entry under either
+  reading, so a resolved URL proves nothing about the data-plane track.
+  [ADR 0002](./docs/adr/0002-discovery-app-version-pin.md) carries the
+  settled record; the header comment in `src/discovery.ts` states the same
+  position.
+
 ## [0.2.0] — 2026-07-22
 
 ### Added
@@ -288,8 +506,7 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...v0.2.1
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.4...v0.1.5
@@ -315,4 +532,11 @@ Carried in this repository's git history from
 [#28]: https://github.com/NovaLux12/carelink-bridge/pull/28
 [#12 round-1 comment]: https://github.com/NovaLux12/carelink-bridge/issues/12#issuecomment-5016844704
 [#12 round-2 comment]: https://github.com/NovaLux12/carelink-bridge/issues/12#issuecomment-5016878393
+[#73]: https://github.com/NovaLux12/carelink-bridge/issues/73
+[#74]: https://github.com/NovaLux12/carelink-bridge/issues/74
+[#75]: https://github.com/NovaLux12/carelink-bridge/issues/75
+[#76]: https://github.com/NovaLux12/carelink-bridge/issues/76
+[#77]: https://github.com/NovaLux12/carelink-bridge/issues/77
+[#78]: https://github.com/NovaLux12/carelink-bridge/issues/78
+[#79]: https://github.com/NovaLux12/carelink-bridge/issues/79
 [upstream PR #2]: https://github.com/domien-f/carelink-bridge/pull/2

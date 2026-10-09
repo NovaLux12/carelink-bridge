@@ -174,24 +174,53 @@ describe('safety contract: no /api/v1/treatments call sites in src/', () => {
     }
   }
 
-  it('contains no axios/fetch POST whose body/URL mentions treatments', () => {
+  // F7 (R6) — the old guard was line-scoped and required the receiver to be
+  // literally `axios.`, so it missed every form this codebase actually uses:
+  // `this.axiosInstance.post(...)` (the idiom in client.ts), a multi-line call
+  // with the URL on the next line, and any literal with a path prefix. Four of
+  // five injected treatments call sites passed a green suite.
+  //
+  // The contract is zero non-comment references, so assert exactly that. There
+  // are only four mentions of `treatments` in src/ at baseline, all in comments,
+  // which this check confirms rather than assumes.
+  it('contains no non-comment reference to the treatments endpoint', () => {
     const offenders: { file: string; line: number; lineText: string }[] = [];
     for (const file of walk(srcRoot)) {
       const raw = fs.readFileSync(file, 'utf8');
-      // Strip /*...*/ block comments and // line comments before checking,
-      // so documented absence references ("NEVER publishes to /api/v1/
-      // treatments.json") don't trip the assertion.
-      const stripped = raw
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/^\s*\/\/.*$/gm, ' ');
-      for (const [lineno, line] of stripped.split('\n').entries()) {
-        if (
-          (/\baxios\.(?:post|put|patch)\s*\(/.test(line)
-            || /\bfetch\s*\(/.test(line)
-            || /\bhttpClient\.(?:post|put|patch)\s*\(/.test(line))
-          && /\btreatments\b/.test(line)
-        ) {
-          offenders.push({ file, line: lineno + 1, lineText: line });
+      for (const [lineno, line] of raw.split('\n').entries()) {
+        if (!/\btreatments\b/.test(line)) continue;
+        // F7 (R6): do NOT strip block comments with a regex. A `/*` anywhere in
+        // the file can pair with a much later `*/`, silently swallowing real
+        // code between them — which is how the previous version of this guard
+        // missed five of five injected treatments call sites. Classify the line
+        // directly instead: a comment line starts with // or * (JSDoc), and the
+        // four legitimate mentions in src/ are all of that form.
+        const trimmed = line.trim();
+        const isCommentLine = trimmed.startsWith('//') || trimmed.startsWith('*');
+        if (!isCommentLine) offenders.push({ file, line: lineno + 1, lineText: line });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('contains no POST/PUT/PATCH call site targeting treatments, any receiver or line span', () => {
+    const offenders: { file: string; line: number; lineText: string }[] = [];
+    for (const file of walk(srcRoot)) {
+      const raw = fs.readFileSync(file, 'utf8');
+      // Drop only full-line comments — never regex-stripped block comments, per
+      // the note above — then flatten whitespace so a call and its URL may be
+      // split across lines without evading the check.
+      const flat = raw
+        .split('\n')
+        .filter((l) => !(l.trim().startsWith('//') || l.trim().startsWith('*')))
+        .join(' ')
+        .replace(/\s+/g, ' ');
+      for (const m of flat.matchAll(
+        /\b(?:axios|axiosInstance|httpClient|request|client)\s*\.\s*(?:post|put|patch)\s*\(/g,
+      )) {
+        const window = flat.slice(m.index, m.index + 400);
+        if (/\btreatments\b/.test(window)) {
+          offenders.push({ file, line: 0, lineText: window.slice(0, 160) });
         }
       }
     }

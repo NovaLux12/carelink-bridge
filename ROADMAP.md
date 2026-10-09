@@ -20,7 +20,7 @@ Each phase below has the same shape:
    "blocked" should name the specific thing that's missing.
 6. **Tracking** — the GitHub issue and any workboard card.
 
-## Phase status (2026-07-27)
+## Phase status (2026-10-09)
 
 | Phase | Status | Notes |
 |-------|--------|-------|
@@ -32,8 +32,8 @@ Each phase below has the same shape:
 | v0.1.5 | Shipped 2026-07-19 | Username source fix |
 | v0.1.6 | Shipped 2026-07-19 | `npm run doctor` |
 | v0.2.0 | Shipped 2026-07-22 | Safety + reliability hardening + operability (SIGTERM, stale-data) |
-| v0.3.0 | Proposed, blocked | Reliability improvements |
-| v0.4.0 | Proposed, blocked | Observability |
+| v0.3.0 | Shipped 2026-09-09 | Circuit breaker + persistent state (#58) |
+| v0.4.0 | Partially shipped | Structured logs (#51) + /healthz + /metrics (#59); #10 still open |
 | v0.5.0 | Partially shipped | Distribution (systemd done; docker, single-binary, HASS pending) |
 | v0.6.0+ | Proposed, low priority | Advanced features |
 
@@ -154,39 +154,84 @@ shipped here provide the security baseline the deferred
 items will inherit; the discovery-pinning and named-error
 work provides the operational baseline.
 
-## v0.3.0 — reliability (proposed)
+**2026-10-08 update (unauthenticated re-probe):** the watch
+itself is unchanged. Across all 109 country-settings
+entries, `defaultDevice` is still `GM` in all 108 real
+countries, `uploaderAllowed` is still `true` everywhere,
+`cpMobileAppAvailable` is present in only 72 of 109 and
+**only AU is `true`** (37 entries — GB, IE, NZ, SA, KR
+among them — do not carry the key at all, so they are
+*unconfigured*, not "not yet available"). One of the 109
+"countries" is `CLINICAL`, a pseudo-region. Nothing has
+flipped.
+
+**Candidate unblocker (2026-10-08):** Medtronic's **reports
+API** — `commoncore.medtronic.{eu,com}`, CSV and PDF output
+over the same account — may carry the historical bolus /
+carb / insulin structure that `monitor/data` is known not
+to. Country-settings advertises 11 `supportedReports`
+(`ADHERENCE`, `ASSESSMENT_AND_PROGRESS`, `BOLUS_WIZARD_FOOD_BOLUS`,
+`DAILY_DETAILS`, `DASHBOARD`, `DEVICE_SETTINGS`, `EPISODE_SUMMARY`,
+`LOGBOOK`, `OVERVIEW`, `WEEKLY_REVIEW`, `INSULIN_ASSESSMENT` — the last
+is absent from AU, US, FR and NZ, so those report 10 while GB, DE,
+IE and NL report 11 — verified against the saved country-settings
+responses). The vendor's portal
+bundle enumerates 14 report types: those 11 plus three portal-only
+ones, `PATIENT_DASHBOARD`, `DATA_TABLE` and `SETTINGS_HISTORY`.
+`SensorAndMeterOverview` is **not** an addition — that is the portal's
+enum key for `OVERVIEW`, which is already in the country-settings list.
+Sources are **Pump / Sensor / Meter**, periods are 0/14/30 days and
+2–12 months, and formats are CSV + PDF. Mapping onto the
+deferred items above:
+
+| Deferred item | Candidate report |
+|---|---|
+| `markers[]` for treatments | `BOLUS_WIZARD_FOOD_BOLUS` or `LOGBOOK` |
+| `therapyAlgorithmState` (auto-mode) | `ASSESSMENT_AND_PROGRESS` / `DEVICE_SETTINGS` |
+| `limits[]` schedule | `DEVICE_SETTINGS` / `SettingsHistory` |
+| `reservoirLevelPercent` | `DAILY_DETAILS` / `DASHBOARD` |
+| NGP-tier alarm codes | `EPISODE_SUMMARY` |
+
+**NOT YET ACHIEVED. NOT INTEGRATED. NOT REACHABLE WITHOUT A
+TOKEN** — the host resolves and is gateway-gated (403
+unauthenticated; an invalid bearer gets a clean JSON
+refusal). If it is ever wired in it must stay **opt-in and
+off by default**: it is a second, much larger data surface
+than the fetch loop. Details in
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface)
+("Reports API").
+
+## v0.3.0 — reliability (shipped 2026-09-09, #58)
 
 **Goal:** make the bridge more resilient to CareLink's
 uptime and rate-limiting without operator intervention.
 
-- [ ] Circuit breaker for CareLink (don't hammer if they're down)
-- [ ] Persistent state file for last successful fetch time
-- [ ] Token refresh before expiry (not just on failure)
+- [x] Circuit breaker for CareLink (don't hammer if they're down)
+- [x] Persistent state file for last successful fetch time
+- [x] Token refresh before expiry (not just on failure)
 
-**What unblocks it:** v0.2.0 has shipped, and the
-`decideRetry` policy from v0.2.0 gives us the building
-block for a circuit breaker. Real-data validation against
-a 780G would also let us verify the persistent state file
-isn't clobbered by token refresh races.
+**What unblocks it:** v0.2.0 has shipped, and the `decideRetry` policy
+from v0.2.0 gives us the building block for a circuit breaker. Real-data
+validation against a 780G would also let us verify the persistent state
+file isn't clobbered by token refresh races.
 
 **Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9)
 
-## v0.4.0 — observability (proposed)
+## v0.4.0 — observability (partially shipped, #51 and #59)
 
 **Goal:** make the bridge debuggable from logs and metrics,
 not just from `console.log` scraping.
 
-- [x] Structured JSON logs (`LOG_FORMAT=json|pretty`; migrating `[Bridge]`/`[Token]` prefixes to `component:` fields still open — see issue #10)
+- [x] Structured JSON logs (`LOG_FORMAT=json|pretty`; `component:` field migration complete — a grep for `[Bridge]`/`[Token]` returns nothing but this line)
 - [x] Prometheus metrics endpoint (`/metrics` + `/healthz`, opt-in via `CARELINK_METRICS_PORT`, loopback-only — no systemd change needed: `RestrictAddressFamilies` already permits `AF_INET` loopback)
 - [x] Request counter, error counter, `last_success_timestamp` gauge, `carelink_circuit_open` gauge
 
-**What unblocks it:** v0.2.0's `decideRetry` returns
-structured reasons (`'permanent-status'`, `'rate-limited'`,
-`'server-5xx'`, `'transport'`) that map cleanly to a
-`reason` label on a metrics counter. The `/metrics` endpoint
-needs to relax the systemd unit's `RestrictAddressFamilies`
-(only IPv4 / IPv6) — that's a one-line change once the
-endpoint exists.
+**What unblocks it:** v0.2.0's `decideRetry` returns structured reasons
+(`'permanent-status'`, `'rate-limited'`, `'server-5xx'`, `'transport'`)
+that map cleanly to a `reason` label on a metrics counter. The
+`/metrics` endpoint binds loopback only, and the shipped systemd unit's
+`RestrictAddressFamilies=AF_INET AF_INET6` already permits that, so no
+unit change was needed.
 
 **Tracking:** [GitHub issue #10](https://github.com/NovaLux12/carelink-bridge/issues/10)
 
@@ -225,6 +270,48 @@ hand-rolled fixtures (significant work). Multi-account is
 a feature request from one user; not blocking, not
 prioritised.
 
+**Caregiver mode is the item most likely to move, and the
+identity namespace is why.** The bridge already walks a
+care-partner path (`fetchAsCarepartner`,
+`/patient/m2m/links/patients`), but the official app's
+identity leg is a *different* namespace on the same host —
+`/api/carepartner/v2/{users/me,links/patients}` — and it is
+live (401 unauthenticated, verified 2026-10-08). Whether a
+valid token can read a linked patient through the namespace
+this bridge actually uses is **unverified**, and a second
+identity is not buildable on top of an unverified one. That
+is the second of the two cheapest authenticated checks in
+[Pre-pump authenticated checks](#pre-pump-authenticated-checks-cheapest-first).
+The multi-patient fan-out fixture item is also one of the
+things the reports API might unblock — see the v0.2.0
+maintenance note above.
+
+## Pre-pump authenticated checks (cheapest first)
+
+Everything probed on 2026-10-08 was **unauthenticated** — a 401, a 403
+or a 200 is the whole of what a token-less probe can establish. The two
+cheapest checks that need a real account token, in order:
+
+1. **`npm run login` end-to-end.** Does the pinned `android/3.6` Auth0
+   flow still work at all? It exercises discovery → PKCE → token
+   exchange → refresh, and it is the only check that catches an Auth0
+   drift before it becomes a November emergency. It needs no data fetch
+   and no pump.
+2. **`GET /api/carepartner/v2/users/me` vs `GET /patient/users/me`.**
+   Both answer `401` without a token, so **which one actually returns
+   data with a valid token is unknown** — and that is the open question
+   behind the namespace difference between this bridge and the official
+   app (see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface)).
+   One request each, same account, same token, five minutes of work.
+
+If check 2 resolves toward the `/api/carepartner/v2/*` namespace, the
+**identity** leg in `src/carelink/urls.ts` (`me`, `linkedPatients`) is
+what moves — not the data leg, which is a cumulus endpoint and does not
+care which identity namespace fetched the token. Everything past these
+two (the reports API, the 780G payload shape, which
+`/connect/carepartner/v{N}/display/message` actually answers) is
+blocked on a real pump or a real capture.
+
 ## Out of scope (explicitly)
 
 - **Closed-loop insulin dosing** — this is a data bridge
@@ -250,11 +337,12 @@ Active open work, cross-referenced from issues:
 | Item | Issue | Status |
 |------|-------|--------|
 | Pre-pump operator checklist | [#7](https://github.com/NovaLux12/carelink-bridge/issues/7) | open |
-| v0.3.0 reliability | [#9](https://github.com/NovaLux12/carelink-bridge/issues/9) | proposed |
-| v0.4.0 observability | [#10](https://github.com/NovaLux12/carelink-bridge/issues/10) | proposed |
+| v0.3.0 reliability | [#9](https://github.com/NovaLux12/carelink-bridge/issues/9) | closed — shipped in #58 |
+| v0.4.0 observability | [#10](https://github.com/NovaLux12/carelink-bridge/issues/10) | open — items 1 and 2 shipped (#51, #59) |
 | v0.5.0 distribution (remaining) | [#11](https://github.com/NovaLux12/carelink-bridge/issues/11) | proposed |
 | Real-data discoveries tracker | [#12](https://github.com/NovaLux12/carelink-bridge/issues/12) | monitoring after pump arrival |
 | Low-priority repo hygiene | [#13](https://github.com/NovaLux12/carelink-bridge/issues/13) | backlog |
+| Reports API (unintegrated, token-gated) | [#76](https://github.com/NovaLux12/carelink-bridge/issues/76) | candidate source for the deferred 780G fixtures — **not yet achieved** |
 
 ## Upstream relationship
 

@@ -30,6 +30,20 @@ write a new ADR that explicitly **supersedes** the old one. Do not edit
 the old ADR in place — the historical record matters as much as the
 current state.
 
+One clarification, because it comes up in practice and guessing it is how
+a merged ADR ends up rewritten: the rule above is about **decisions**.
+Changing a decision still requires a new superseding ADR. An **evidence
+correction** — a re-probed matrix, a corrected status code, a symbol
+renamed — may be applied to a merged ADR in place, but only by appending
+an explicit `## Amendment (YYYY-MM-DD)` section that quotes the
+superseded text verbatim and labels it superseded with the date. The
+superseded text stays in the file; the corrected text lives in the body
+and in the Amendment's explanation of what changed. That keeps the
+history recoverable without reading the git log, which is what the rule
+is protecting, without forcing a new ADR number for a typo.
+[ADR 0002](./0002-discovery-app-version-pin.md) carries the worked
+example.
+
 ## Index
 
 | # | Title | Status |

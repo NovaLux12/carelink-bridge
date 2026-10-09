@@ -108,6 +108,20 @@ export interface DiscoverResponse {
     region: string;
     UseSSOConfiguration?: string;
     Auth0SSOConfiguration?: string;
+    /**
+     * Which cumulus track this entry points at, as a full base URL, e.g.
+     * 'https://clcloud.minimed.eu/connect/carepartner/v13'. Optional in the
+     * live shape; the issue-#75 pin guard in src/login-errors.ts fails closed
+     * when it is missing.
+     */
+    baseUrlCumulus?: string;
     [key: string]: unknown;
   }>;
+  /**
+   * Medtronic's pinned signer list: 8 `{ host, cert }` entries, `cert` being
+   * base64 (no PEM armour). Watched by `checkDiscoveryCertificates` in
+   * src/discovery.ts (issue #77) as a change tripwire only — it is not, and
+   * cannot be, verification of the unknown `x-cum-signature` algorithm.
+   */
+  certificates?: Array<{ host: string; cert: string }>;
 }

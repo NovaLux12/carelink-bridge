@@ -7,8 +7,19 @@
 > **Part of [Loopwise Health](https://loopwise.uk)** — open diabetes infrastructure (CareLink bridge, Nightscout MCP, reporting toolkit) plus a Claude-powered layer for briefs, reports, and triage.
 
 Sends your Medtronic pump and CGM data to [Nightscout](http://www.nightscout.info/)
-automatically, by logging into Medtronic's CareLink servers the same
-way the official CareLink app does and uploading what it gets.
+automatically, by logging into Medtronic's CareLink servers and
+uploading what it gets.
+
+> **How close is this to the official app?** The **data** path is the
+> same one the official CareLink app uses — the bridge takes its login
+> configuration from the same discovery document and posts to the same
+> cumulus data endpoints. The **login/identity** path is not: the
+> official app calls `/api/carepartner/v2/*`, this bridge calls bare
+> `/patient/*`. Both answer `401` without a token, so which one
+> actually returns data with a valid token is **unverified** — it is
+> the first authenticated check in [ROADMAP.md](./ROADMAP.md).
+> Live-probed 2026-10-08; host and namespace details in
+> [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface).
 
 > **Community fork.** This is a community-maintained fork of
 > [domien-f/carelink-bridge](https://github.com/domien-f/carelink-bridge).
@@ -38,7 +49,9 @@ script, Nightscout + cloudflared docker-compose stack.
 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Module map,
 data flow diagrams, OAuth deep-dive, error / retry semantics,
 test architecture, "where do I start" guide for new
-contributors.
+contributors, plus the live CareLink API surface — which
+hosts are the patient API and which are not (note the
+reports API is on `medtronic.eu`, **not** `minimed.eu`).
 
 **I want to contribute a change** —
 [CONTRIBUTING.md](./CONTRIBUTING.md). Workflow, ground rules,
