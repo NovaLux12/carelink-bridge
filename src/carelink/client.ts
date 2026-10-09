@@ -650,6 +650,21 @@ const BLE_DEVICE_MODELS: readonly string[] = [
   'SKU78954', 'SKU78956', 'SKU78958',
 ];
 
+/**
+ * Published device-family tokens that are BLE-paired but do not carry the
+ * `BLE` or `SIMPLERA` prefix (#95).
+ *
+ * Source: Medtronic's own unauthenticated configuration document at
+ * `GET /patient/v2/configuration/public`, key
+ * `personal.device.family.to.model.mapping`, corroborated by
+ * `system.settings.transfer.feature.config.device.mapping`, which maps
+ * `"CC880": "MiniMed™ Flex"`.
+ *
+ * `CC880` is the only entry: it is the one the vendor names as the Flex, which
+ * is the family behind issue #91's silent zero-data fetch.
+ */
+const BLE_FAMILY_TOKENS: ReadonlySet<string> = new Set(['CC880']);
+
 /** Sentinel the API uses for "no sensor attached". */
 const NO_SENSOR = 'NOSENSOR';
 
@@ -673,13 +688,39 @@ export function isBleDevice(deviceFamily?: string, deviceModel?: string): boolea
     // position is a silent false-negative — the price of the prefix form,
     // accepted because every observed spelling leads with the token.
     if (family.startsWith('BLE') || family.startsWith('SIMPLERA')) return true;
-    // Substring, deliberately — but only for this one token (#91). Unlike
-    // 'BLE' (a substring of ENABLE, DOUBLE, TABLE), 'FLEX' is not a substring
-    // of any other known family value (GUARDIAN, NGP, CGM, CC, PARADIGM,
-    // BLE_*, SIMPLERA*, MINIMEDFLEX), audited 2026-10-09. The Flex's family
-    // spelling is UNVERIFIED — "Minimed Flex" does not lead with a known
-    // token, so prefix matching cannot cover it. Revisit if a non-Flex
-    // family containing FLEX ever appears.
+    // Exact published family tokens that are NOT BLE-prefixed (#95). Medtronic
+    // publishes the complete vocabulary at
+    // GET /patient/v2/configuration/public (unauthenticated), and the same
+    // document's `system.settings.transfer.feature.config.device.mapping` maps
+    // "CC880" to the display name "MiniMed™ Flex" — so CC880 is the Flex family
+    // #91 reported.
+    //
+    // Matched EXACTLY after normalisation rather than by substring. Because
+    // the set is closed and small (all 16 are enumerated in
+    // test/device-family-vocabulary.test.ts), an exact match cannot produce a
+    // false positive by construction. What it can do is MISS an unseen
+    // spelling — and normalisation above is what buys the leniency for that,
+    // by folding case and separators into one token.
+    //
+    // Only CC880 is claimed: it is the one the vendor names as the Flex.
+    // CC840, EAGLE, GST, NMX7, NMX8, GM and INSTINCT are deliberately NOT
+    // matched — nothing confirms they are BLE-paired, and routing a
+    // non-BLE device down the BLE endpoint is its own silent failure.
+    if (BLE_FAMILY_TOKENS.has(family)) return true;
+    // Fallback for the DISPLAY-name spelling, which the vendor also publishes
+    // ("MiniMed™ Flex") and which some responses use in place of the token —
+    // the same way `SIMPLERA_SYSTEM` arrives as "Simplera™ system".
+    //
+    // This is the loosest thing in the matcher, deliberately, and the residual
+    // risk is stated rather than eliminated: a substring match also accepts
+    // nonsense like "REFLEX". Audited against all 16 published families and no
+    // real device is misrouted today, because none of the 16 contains "FLEX" —
+    // CC880 included, which is why CC880 is matched above by exact token
+    // instead. If Medtronic ever publishes a non-Flex family whose name
+    // contains "FLEX", tighten this to /MINIMED.*FLEX/ or similar; the
+    // reasoning for keeping it loose is that a missed Flex is a silent
+    // zero-data fetch, which is worse than a false positive on a name that
+    // does not exist.
     if (family.includes('FLEX')) return true;
   }
 
