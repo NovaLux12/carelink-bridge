@@ -12,6 +12,22 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Minimed Flex detection (#91)
+
+- The Flex (MMT-8062/8063/8082/8083/8084/8085, "Minimed Flex") is now
+  BLE-detected by model prefix and by the `FLEX` family token. Reported
+  live upstream (domien-f/carelink-bridge#3): silent zero-data fetch after
+  a 780G-to-Flex upgrade, the exact failure mode of undetected BLE. Both
+  spellings are INFERRED from Medtronic's portal bundle, unverified on
+  the wire.
+- The `FLEX` match is deliberately a substring test, unlike the `BLE`
+  token (prefix-only, since `BLE` is a substring of ordinary words).
+  Audited: `FLEX` is not a substring of any other known family value.
+  The reasoning is recorded next to the code so a future reviewer does
+  not "fix" it back.
+
+### 2026-10-08/09 research pass (previous entry, retained)
+
 A research pass into CareLink's live API surface, followed by the fixes
 it produced. The branch is one squashed commit carrying both the code and
 the documentation changes, so this entry covers both.

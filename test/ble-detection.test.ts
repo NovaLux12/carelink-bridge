@@ -229,4 +229,35 @@ describe('isBleDevice()', () => {
     expect(isBleDevice('N', 'MMT-7841')).toBe(true);
     expect(isBleDevice('O', 'MMT-7841')).toBe(true);
   });
+
+  /**
+   * #91 — Minimed Flex (MMT-8062 family). Reported live upstream
+   * (domien-f/carelink-bridge#3): silent zero-data fetch after a 780G-to-Flex
+   * upgrade. The Flex sends neither a BLE/SIMPLERA family token nor a
+   * previously-known model, so both spellings are covered.
+   */
+  it('detects the Minimed Flex by model number (#91)', () => {
+    for (const m of ['MMT-8062', 'MMT-8063', 'MMT-8082', 'MMT-8083', 'MMT-8084', 'MMT-8085']) {
+      expect(isBleDevice(undefined, m), m).toBe(true);
+    }
+  });
+
+  it('detects the Minimed Flex by family string (#91)', () => {
+    for (const f of ['Minimed Flex', 'MINIMEDFLEX', 'FLEX']) {
+      expect(isBleDevice(f), f).toBe(true);
+    }
+  });
+
+  it('does not false-positive any known non-Flex family on the FLEX token (#91)', () => {
+    // The audit behind the includes('FLEX') choice: none of these contain it
+    // (checked post-normalisation, as the matcher sees them).
+    const cases: Array<[string, boolean]> = [
+      ['GUARDIAN', false], ['NGP', false], ['CGM', false], ['CC', false],
+      ['PARADIGM', false], ['ENABLE', false], ['TABLE', false],
+      ['BLE_MINIMED', true], ['SIMPLERA_SYSTEM', true], ['Simplera™ system', true],
+    ];
+    for (const [f, expected] of cases) {
+      expect(isBleDevice(f), f).toBe(expected);
+    }
+  });
 });
