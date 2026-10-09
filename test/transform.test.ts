@@ -140,6 +140,106 @@ describe('transform()', () => {
     });
   });
 
+  describe('device battery precedence (#82)', () => {
+    // Mirrors the reference client's getDeviceBatteryLevel(): prefer
+    // pumpBatteryLevelPercent, fall back to medicalDeviceBatteryLevelPercent
+    // only when the former is 0 or absent. INFERRED from the reference
+    // client's model — unverified on the wire.
+    it('prefers pumpBatteryLevelPercent when present', () => {
+      const ds = transform(data({
+        medicalDeviceBatteryLevelPercent: 65,
+        pumpBatteryLevelPercent: 82,
+      })).devicestatus[0];
+      expect(ds.pump?.battery).toEqual({ percent: 82 });
+    });
+
+    it('falls back to medicalDeviceBatteryLevelPercent when pump is 0', () => {
+      const ds = transform(data({
+        medicalDeviceBatteryLevelPercent: 65,
+        pumpBatteryLevelPercent: 0,
+      })).devicestatus[0];
+      expect(ds.pump?.battery).toEqual({ percent: 65 });
+    });
+
+    it('is unchanged when only medicalDeviceBatteryLevelPercent is present (older devices)', () => {
+      const ds = transform(data({
+        medicalDeviceBatteryLevelPercent: 65,
+      })).devicestatus[0];
+      expect(ds.pump?.battery).toEqual({ percent: 65 });
+    });
+
+    it('prefers pumpBatteryLevelPercent on the GUARDIAN branch too', () => {
+      // The helper is also wired into the GUARDIAN uploader.battery read, so
+      // pin it there as well — a GUARDIAN payload carrying a nonzero pump
+      // value must report it, not the medical-device value.
+      const ds = transform(data({
+        medicalDeviceFamily: 'GUARDIAN',
+        medicalDeviceBatteryLevelPercent: 65,
+        pumpBatteryLevelPercent: 82,
+      })).devicestatus[0];
+      expect(ds.uploader.battery).toBe(82);
+    });
+
+    it('passes pumpBatteryLevelPercent through on the connect mirror', () => {
+      const ds = transform(data({
+        medicalDeviceBatteryLevelPercent: 65,
+        pumpBatteryLevelPercent: 82,
+      })).devicestatus[0];
+      expect(ds.connect?.pumpBatteryLevelPercent).toBe(82);
+      expect(ds.connect?.medicalDeviceBatteryLevelPercent).toBe(65);
+    });
+  });
+
+  describe('reservoir source (#83)', () => {
+    it('keeps using the units fields, not reservoirLevelPercent', () => {
+      const ds = transform(data({
+        reservoirRemainingUnits: 42,
+        reservoirAmount: 40,
+        reservoirLevelPercent: 55,
+      })).devicestatus[0];
+      // Units win: downstream looping clients read this value, and the
+      // percent is quantised while the units are rounded.
+      expect(ds.pump?.reservoir).toBe(42);
+    });
+
+    it('falls back through the units fields as before', () => {
+      expect(transform(data({ reservoirAmount: 40 })).devicestatus[0].pump?.reservoir).toBe(40);
+    });
+
+    it('keeps reservoirLevelPercent typed (type-level pin)', () => {
+      // CareLinkData carries [key: string]: unknown, so deleting the declared
+      // field breaks neither vitest nor tsc. This assignment errors
+      // ("unknown not assignable") if the declaration is removed.
+      const pct: number | undefined = data({ reservoirLevelPercent: 55 }).reservoirLevelPercent;
+      expect(pct).toBe(55);
+    });
+  });
+
+  describe('per-reading SG fields (#85)', () => {
+    it('carries sensorState and relativeOffset on the type without changing output', () => {
+      // Typing only: the transform does not consume these yet, and must not
+      // change SGV timestamp semantics in this change. This pins that a payload
+      // carrying them transforms exactly like one without.
+      const withFields = data({});
+      withFields.sgs = withFields.sgs.map((sg) => ({
+        ...sg, sensorState: 'NORMAL', relativeOffset: 0,
+      }));
+      const plain = data({});
+      expect(transform(withFields).entries).toEqual(transform(plain).entries);
+    });
+
+    it('keeps sensorState and relativeOffset typed on CareLinkSG (type-level pin)', () => {
+      // The spread above is not excess-property-checked, so removing the
+      // declarations would still pass. Direct property reads error
+      // ("property does not exist") if the fields are removed — CareLinkSG
+      // has no index signature to hide behind.
+      const sg0 = makeSG(70);
+      const st: string | undefined = sg0.sensorState;
+      const off: number | undefined = sg0.relativeOffset;
+      expect([st, off]).toEqual([undefined, undefined]);
+    });
+  });
+
   describe('mmol/L unit conversion (P0.1 safety)', () => {
     // CareLink accounts report their preferred unit via bgunits/bgUnits.
     // mmol/L values must be converted to mg/dL before reaching Nightscout;
