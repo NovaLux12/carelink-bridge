@@ -12,6 +12,43 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Correct the device-family matcher against Medtronic's published vocabulary (#95)
+
+Medtronic publishes the complete device-family vocabulary, unauthenticated, at
+`GET /patient/v2/configuration/public` — the same host the bridge already talks
+to. #93 added the six Minimed Flex *model* prefixes and, alongside them, guessed
+the family token as a `FLEX` substring match.
+
+The published document settles it: `personal.device.family.to.model.mapping`
+lists sixteen families, and `system.settings.transfer.feature.config.device.mapping`
+independently maps `"CC880"` to the display name `"MiniMed™ Flex"`. So **CC880 is
+the Flex family**, and the six models #93 added do appear under it.
+
+- `isBleDevice()` now matches the exact published token `CC880`, so a
+  **family-only** payload — the hard case, since `monitor/data` returns
+  `deviceFamily` while `medicalDeviceFamily` is undefined on the patient path —
+  is detected without relying on `deviceModel` being present. Before this, a
+  `CC880` payload returned false and reproduced #91's silent zero-data fetch.
+- The `FLEX` substring match is **kept**, as a fallback for the display-name
+  spelling the vendor also publishes (`"Minimed™ Flex"`), on the same reasoning
+  that `SIMPLERA_SYSTEM` may arrive as `"Simplera™ system"`. Audited against all
+  sixteen published families: none contains `FLEX`, so no real device is
+  misrouted today. Detection of `CC880` never depended on it — that token has
+  no `FLEX` in it. The residual looseness (a substring match also accepts
+  nonsense like `REFLEX`) is documented rather than eliminated, and is not
+  pinned as a contract, so a later contributor can tighten the matcher.
+- **New test pins the whole published vocabulary** — all sixteen families, each
+  with its expected verdict and a stated reason. `CC840`, `EAGLE`, `GST`, `NMX7`,
+  `NMX8`, `GM` and `INSTINCT` are deliberately left unmatched: nothing confirms
+  they are BLE-paired, and routing a non-BLE device down the BLE endpoint is its
+  own silent failure. The table exists so that a family Medtronic adds later is a
+  decision someone makes, rather than a gap that surfaces weeks later as "the
+  bridge uploaded nothing".
+
+Caveat, unchanged: this is Medtronic's published *configuration*, not an
+observation of a `monitor/data` response. It establishes the vocabulary, not
+which field carries it or in what casing. #81 stays open until a token confirms.
+
 ### Minimed Flex detection (#91)
 
 - The Flex (MMT-8062/8063/8082/8083/8084/8085, "Minimed Flex") is now
