@@ -340,8 +340,8 @@ required — the rest are optional.
 | `MMCONNECT_SERVERNAME` | *(empty)* | Pins the CareLink hostname explicitly instead of the EU/US default. Leave blank unless you know you need it. An unrecognised value keeps the single-host behaviour. |
 | `CARELINK_INTERVAL` | `300` | How often to fetch data, in seconds (300 = 5 minutes) |
 | `CARELINK_SGV_LIMIT` | `24` | How many SGV entries to upload per fetch |
-| `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs |
-| `LOG_FORMAT` | `pretty` | `pretty` (human, default) or `json` (one JSON object per line — for `journalctl -o json`, Loki, Vector). Never logs secrets; keys matching `secret/password/token` are redacted. |
+| `CARELINK_QUIET` | `true` | Set to `false` to see more detailed logs. Note: verbose mode logs the **full upload payload** (every glucose value) — do not leave it on in production. Only the literal `false` enables it: `0`, `no` and `yes` all mean quiet, and an empty value counts as unset. |
+| `LOG_FORMAT` | `pretty` | `pretty` (human, default) or `json` (one JSON object per line — for `journalctl -o json`, Loki, Vector). Key names matching `secret`/`password`/`passwd`/`token`/`authorization`/`api-key`/`bearer`/`credentials`/`cookie` are redacted, including inside nested objects and arrays. That is key-name matching only — a credential in an innocuously-named field would still be logged. The verbose upload payload (see `CARELINK_QUIET`) is **not** redacted. |
 | `CARELINK_PATIENT` | *(empty)* | Patient username, only needed if your care-partner account has multiple patients |
 | `CARELINK_METRICS_PORT` | `0` | `0` = disabled (default, no inbound port). Set e.g. `8081` for a loopback-only observability server (`/healthz` + `/metrics`). |
 
@@ -359,7 +359,12 @@ CARELINK_QUIET=false   # json logs are also verbose-gated for info; warn/error a
 
 Each line is a single JSON object `{"ts":"2026-08-20T...","level":"info","msg":"Fetch succeeded",...}` that `journalctl -o json` or `jq` can filter without regex. In `pretty` mode (default) the bridge keeps its current `Date + message` format so existing `grep` workflows keep working.
 
-Secrets are never emitted — any structured field whose key matches `secret`, `password`, or `token` is replaced with `"[REDACTED]"` before output.
+Structured fields (`info`/`warn`/`error`) have credential-looking **key names**
+replaced with `"[REDACTED]"`, at any nesting depth — see the `LOG_FORMAT` row above
+for the exact list and for what redaction does *not* cover. Redaction is
+key-name matching, not content inspection: a credential passed under an
+innocuous field name is still logged. The legacy `log()` helper takes positional
+arguments rather than a fields object, so it does not redact at all.
 
 ### Prometheus metrics + health (`CARELINK_METRICS_PORT`)
 

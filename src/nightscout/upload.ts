@@ -7,6 +7,9 @@ export async function upload(
   endpoint: string,
   secret: string,
 ): Promise<void> {
+  // Verbose-only (#90): this logs the FULL upload payload, i.e. every glucose
+  // value. Deliberate debug facility, silent by default — do not move this to
+  // info/warn/error or it lands in every operator's journal.
   logger.log('POST ' + endpoint + ' ' + JSON.stringify(entries));
 
   const hashedSecret = crypto.createHash('sha1').update(secret).digest('hex');

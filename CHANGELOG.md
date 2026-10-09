@@ -25,6 +25,65 @@ record, not reconstructed.
   Audited: `FLEX` is not a substring of any other known family value.
   The reasoning is recorded next to the code so a future reviewer does
   not "fix" it back.
+### Test-infra and logger/config safety (#87, #88, #89, #90)
+
+- [#87] — CI now typechecks `test/` too, via `tsconfig.test.json`. Previously
+  neither `npx tsc --noEmit` nor CI could see a type error in any test file —
+  which is how a TS2322 in a test went unnoticed. The override has to restate
+  both `include` and `exclude`, because the base config excludes `test/`, and
+  it sets `rootDir: "."` because the base sets `rootDir: "src"`. Verified by
+  injecting a type error into a test file and watching CI's new step fail.
+  Clean today, so this only stops the next one.
+- [#88] — `logger.ts` redaction widened to `authorization` / `bearer` /
+  `api-key` / `credentials` / `passwd` / `cookie` spellings and made recursive:
+  sensitive keys are redacted at any nesting depth, through objects and arrays.
+  Cycles terminate (`[CIRCULAR]`); a *shared* reference is rendered once per
+  occurrence, because only the current ancestor path is tracked — not every
+  object seen. Non-plain values (`Date`, `Error`, `Buffer`) pass through
+  untouched rather than being flattened to `{}`. Plus the module's first direct
+  test coverage: every sensitive spelling, nested redaction, shared-reference
+  and array-of-array shape, cycle survival, 2000-deep nesting, benign fields
+  untouched, both formats, gating, and the JSON record shape. The walk reads own
+  enumerable keys with no prototype check, so class instances and cross-realm
+  objects are redacted too, and it neutralises the ways a value can smuggle
+  itself past the walk:
+  - functions are dropped, and an **inherited** `toJSON` is replaced — the
+    `#private`-field class whose `toJSON` returns its secret has no own keys,
+    so `JSON.stringify` would otherwise invoke it after redaction;
+  - a throwing getter or `ownKeys` trap — including a `toJSON` getter — yields
+    `[UNREADABLE]` instead of
+    propagating out of `warn()`, which matters because `warn()` is called from
+    error handlers;
+  - nesting past 100 levels yields `[MAX_DEPTH]` rather than a `RangeError`;
+  - a typed array is handed to `JSON.stringify` intact, but a NON-index own
+    key attached to one is redacted like any other field — a bare `Uint8Array`
+    has no `toJSON`, so JSON.stringify would otherwise emit it verbatim;
+  - a payload `JSON.stringify` rejects (BigInt) degrades to
+    `log_stringify_error` **while keeping `ts`/`level`/`msg`** — a bare error
+    flag with no level and no message is untriageable, which is the one moment
+    the log matters;
+  - `Buffer`/typed arrays pass to `JSON.stringify` intact instead of collapsing
+    to `{"0":117,...}`.
+
+  Key-NAME matching remains best-effort, and the legacy `log()` helper takes
+  positional arguments rather than a fields object so it does not redact at
+  all — both now stated in USER-GUIDE rather than implied away.
+- **Docs corrected rather than left absolute**: the "secrets are never emitted"
+  line in USER-GUIDE, "no PII" in the ARCHITECTURE module map, and the
+  `npx tsc --noEmit` verification step in both ARCHITECTURE and CONTRIBUTING
+  (now `npm run typecheck`, which is what CI runs) all overstated what the code
+  does. `.env.example` documents the `CARELINK_QUIET` coercion too.
+- [#89] — first direct coverage for `src/config.ts`: required-var errors,
+  safety-relevant defaults, `LOG_FORMAT` fallback, and the `CUSTOMCONNSTR_`
+  fallback. The `CARELINK_QUIET` truthiness table is pinned as current
+  behaviour, and the guide row now says plainly what that behaviour is: only
+  the literal `false` turns verbose logging on, so `0`/`no`/`yes` mean quiet
+  and an empty value counts as unset.
+- [#90] — documented that verbose mode logs the full upload payload: the
+  `CARELINK_QUIET` settings row and the `LOG_FORMAT` row now say so, and
+  `src/nightscout/upload.ts` carries the warning. Deliberate debug facility,
+  silent by default — documented, not removed.
+
 
 ### Payload-schema typings (#82, #83, #85)
 
