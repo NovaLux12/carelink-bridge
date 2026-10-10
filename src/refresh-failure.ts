@@ -37,7 +37,7 @@
  * and the operator seeing hundreds of consecutive failures with no
  * actionable signal. Prompting for re-login is the right recovery.
  *
- * Source: research/medtronic-carelink-2026-07-21/02-ecosystem-parity.md
+ * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/02-ecosystem-parity.md
  * (memo line 40: "classify permanent auth failures separately from
  * transport/5xx failures; honour Retry-After, add jitter, use capped
  * exponential delay, use status-aware retry").

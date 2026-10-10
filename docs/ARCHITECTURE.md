@@ -318,6 +318,25 @@ silently.
 
 ## Live CareLink API surface
 
+> [!IMPORTANT]
+> **The full published map lives at
+> [`NovaLux12/carelink-api-research`](https://github.com/NovaLux12/carelink-api-research)**
+> — start with its
+> [`docs/00-summary-the-map.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md).
+> This section keeps **only what this bridge depends on**, plus the
+> corrections that were paid for here. It is not the estate map.
+
+What the research repo has **added or moved** since this section was written —
+read it before relying on anything below:
+
+- **`/patient/v2/configuration/public` is unauthenticated** and carries 69 keys, including the complete device-family vocabulary. Nothing below knows about it.
+- **`/patient/v2/monitor/data` is live, 405 POST-only**, and `/patient/v2/users/me` is 401 — the v2 tree is a real data plane, not just config.
+- **`/patient/reports/*` is live on `carelink.minimed.eu`**, so the reports surface behind issue #76 is not `commoncore`-only. `commoncore.medtronic.*` now returns a CloudFront **502 "could not resolve the origin domain name"** — an origin DNS failure, not an absence.
+- **There is a patient-facing client** on `carelink.minimed.eu` / `carelink-support.minimed.eu` with 70 `/patient/*` endpoints not in the clinician bundle, and the clinician bundle now replicates across **five** hosts.
+- **`/patient/countries` (117 countries) and `/patient/languages`** answer unauthenticated.
+- **The 16-family vocabulary is published**, and the vendor's own patient app matches on five tokens (`BLE`, `BLE_X`, `SIMPLERA`, `SIMPLERA_X`, `GUARDIAN`) via `startsWith` — `CC880` is not among them. See [`docs/05-devices-and-vocabulary.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/05-devices-and-vocabulary.md).
+
+
 Everything in this section was **verified live on 2026-10-08** against
 `clcloud.minimed.{eu,com}` and `carelink.minimed.{eu,com}` with a
 read-only, unauthenticated, low-rate probe (~1.2s between requests, no

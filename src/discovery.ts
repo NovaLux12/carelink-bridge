@@ -68,7 +68,7 @@ import { createHash } from 'node:crypto';
  * with no Auth0 SSO URL and break login. Keep it at a version verified to
  * return Auth0SSOConfiguration.
  *
- * Source: research/medtronic-carelink-2026-07-21/01-endpoint-matrix.md
+ * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/01-endpoint-matrix.md
  * (table at the top of the file), re-probed live 2026-10-09.
  */
 export const DISCOVERY_APP_VERSION = 'android/3.6';

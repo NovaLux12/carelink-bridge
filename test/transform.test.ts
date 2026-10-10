@@ -244,7 +244,7 @@ describe('transform()', () => {
     // CareLink accounts report their preferred unit via bgunits/bgUnits.
     // mmol/L values must be converted to mg/dL before reaching Nightscout;
     // otherwise looping clients (Loop, xDrip, AAPS) interpret the value as
-    // mg/dL and over-deliver insulin. See research/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md (P0.1).
+    // mg/dL and over-deliver insulin. See https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md (P0.1).
 
     it('converts 5.5 mmol/L to 99 mg/dL (round-half-up via factor 18.0182)', () => {
       const result = transform(data({

@@ -12,7 +12,7 @@ import {
 
 /**
  * Discovery pinning is a load-bearing operational guard (see
- * research/medtronic-carelink-2026-07-21/01-endpoint-matrix.md for the
+ * https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/01-endpoint-matrix.md for the
  * per-version table). These tests assert the production URL template
  * directly so a future contributor who edits `buildDiscoveryUrl` or the
  * pinned version string cannot silently regress the bridge to a no-Auth0

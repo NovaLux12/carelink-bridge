@@ -1,7 +1,7 @@
 /**
  * Last-alarm policy module.
  *
- * Source: research/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md (P0.2).
+ * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md (P0.2).
  *
  * SAFETY CONSTRAINT: alarms with codes indicating "Critical Pump Error. Stop
  * using pump" or "Insulin delivery stopped" must NOT be auto-published to
