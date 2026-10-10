@@ -580,7 +580,7 @@ function hasPayload(data: unknown): boolean {
  * ---
  *
  * Two additional inputs matter, found during the 2026-10-08 reverse-engineering
- * pass (research notes: research/probe-2026-10-08/APP-EMULATION-RESEARCH.md):
+ * pass (research notes: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/probe-2026-10-08/APP-EMULATION-RESEARCH.md):
  *
  * 1. **Medtronic's own portal defines its device-family value as
  *    `SIMPLERA_SYSTEM = "Simplera™ system"` — mixed case.** JavaScript's

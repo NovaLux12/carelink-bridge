@@ -4,7 +4,7 @@ import { isPermanentRefreshFailure } from '../src/refresh-failure.js';
 /**
  * Refresh-failure classification contract.
  *
- * Source: research/medtronic-carelink-2026-07-21/02-ecosystem-parity.md
+ * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/02-ecosystem-parity.md
  * (memo line 40: "classify permanent auth failures separately from
  * transport/5xx failures").
  *

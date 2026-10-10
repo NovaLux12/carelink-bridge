@@ -7,7 +7,7 @@
  * carries the actionable guidance ("point DISCOVERY_APP_VERSION at a config
  * known to return Auth0SSOConfiguration").
  *
- * Source: research/medtronic-carelink-2026-07-21/README.md line 26 and
+ * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/README.md line 26 and
  * 04-operational-history.md 2026-01-02 (legacy `mdtlogin-ocl.medtronic.com`
  * RST, all four community clients lost connectivity on the same day).
  *

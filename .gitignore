@@ -5,11 +5,14 @@ state.json
 *.env
 .idea/
 # research/ holds the Medtronic CareLink investigation notes that inform
-# this fork's behaviour. They are not part of the published repo - the
-# maintainer keeps them locally for cross-referencing. Anyone running
-# `git add -A` will not stage them, and the directory will not appear in
-# `git status` for any contributor who clones the repo.
-research/
+# this fork's behaviour. The synthesised, scrubbed, published version of
+# that research lives at:
+#
+#   https://github.com/NovaLux12/carelink-api-research
+#
+# The local notes stay gitignored because they carry material that must not
+# be published (vendor API keys, internal hostnames, raw archive captures).
+# The published repo is the citable surface; source comments link into it.
 
 # macOS Finder artifacts (also created by some Linux/Windows tools when
 # editing files on a shared filesystem). Not source.

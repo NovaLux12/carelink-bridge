@@ -13,7 +13,7 @@ import { data } from './fixtures.js';
  *   (c) absence grep proving src/ contains zero /api/v1/treatments *call sites*
  *   (d) behavioral: alarm lives in devicestatus, not entries
  *
- * Safety contract (research/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md,
+ * Safety contract (https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md,
  * memo lines 23-25): priority-1 alarms get a WARN log but NEVER auto-publish
  * to Nightscout /api/v1/treatments.json.
  */
