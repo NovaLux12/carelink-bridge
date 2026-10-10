@@ -8,6 +8,7 @@ import { CircuitBreaker, DEFAULT_CIRCUIT_THRESHOLD, DEFAULT_CIRCUIT_COOLDOWN_MS 
 import { isPermanentRefreshFailure } from '../refresh-failure.js';
 import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
+import { isPayloadFresh, payloadAgeMinutes, fresherPayload } from './freshness.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -263,6 +264,8 @@ export class CareLinkClient {
       patientId,
     };
 
+    let staleFallback: CareLinkData | undefined;
+
     for (const endpoint of endpoints) {
       try {
         logger.log('Trying carepartner endpoint:', endpoint);
@@ -270,12 +273,35 @@ export class CareLinkClient {
           headers: { 'Content-Type': 'application/json' },
         });
         if (resp.status === 200) {
-          logger.log('GET data (as carepartner)', endpoint);
-          return resp.data;
+          // A 200 does not mean this endpoint serves *this* device.
+          //
+          // The config-provided version is legacy, and for a device family the
+          // legacy backend has not been taught about, it answers 200 with the
+          // last records it ever held - frozen at the day the pump was paired.
+          // That is the "[Fetch] Success!" with zero uploads pattern: every
+          // poll gets a valid HTTP 200, so accepting the first one ends the
+          // search before the newer endpoints are ever tried.
+          if (isPayloadFresh(resp.data)) {
+            logger.log('GET data (as carepartner)', endpoint);
+            return resp.data;
+          }
+          const age = payloadAgeMinutes(resp.data);
+          logger.log(
+            `Endpoint answered 200 but data is ${age?.toFixed(2)} min old, trying next endpoint`,
+          );
+          staleFallback = fresherPayload(staleFallback, resp.data);
         }
       } catch {
         logger.log('Endpoint failed:', endpoint);
       }
+    }
+
+    // Floor: if no endpoint had anything current, still return the newest
+    // payload we saw. That is exactly what the old first-200-wins code
+    // returned, so this can only improve on it, never regress.
+    if (staleFallback) {
+      logger.log('No carepartner endpoint returned current data; using newest available');
+      return staleFallback;
     }
 
     throw new Error('All carepartner data endpoints failed');

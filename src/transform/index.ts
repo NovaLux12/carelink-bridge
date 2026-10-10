@@ -5,8 +5,7 @@ import { evaluateLastAlarm, logLastAlarm } from '../last-alarm.js';
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
 import { guessPumpOffset, guessPumpOffsetMilliseconds } from './pump-offset.js';
-
-const STALE_DATA_THRESHOLD_MINUTES = 20;
+import { STALE_DATA_THRESHOLD_MINUTES } from '../carelink/freshness.js';
 
 const MMOL_L_TO_MGDL = 18.0182;
 
