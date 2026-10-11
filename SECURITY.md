@@ -16,13 +16,14 @@ the fetch loop. Two related things live elsewhere:
 
 - **An exposure in Medtronic's own surface** — a published key,
   an internal hostname in a public artefact, an auth gap — is a
-  research finding, not a bridge bug. Report it redacted (never the
-  value) through their private advisory channel,
-  <https://github.com/NovaLux12/carelink-api-research/security/advisories/new>,
-  which maintains
+  research finding, not a bridge bug. **Never** report it here,
+  redacted or otherwise. Their intake and redaction rules are in
+  [NovaLux12/carelink-api-research's `SECURITY.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/SECURITY.md);
+  follow those, not this page. They maintain
   [security findings](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/08-security-findings.md)
-  on the vendor surface. Whether yours is already recorded is their
-  call to make — please still report it.
+  on the vendor surface — and whether an exposure is already known,
+  publishable, or held back is their call, so please still report it
+  rather than assuming it is covered.
 - **A login, upload, or crash failure** with an unchanged vendor
   surface is a plain bug — use the [bug form](https://github.com/NovaLux12/carelink-bridge/issues/new?template=bug.yml).
 

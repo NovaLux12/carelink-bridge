@@ -38,5 +38,23 @@ cd carelink-api-research/regression/hurl
 ./run.sh          # exit 0 = the vendor surface has not drifted
 ```
 
+From this repo, `npm run drift:check` runs the same suite and checks its
+prerequisites first.
+
+Four things to know before you run either:
+
+- **It needs `hurl` and `jq`.** A missing tool makes the suite exit non-zero,
+  which is *not* the same as drift. `npm run drift:check` separates the two and
+  exits 2 with install hints.
+- **It sends live traffic to Medtronic's production servers** — around 60
+  read-only requests across seven hosts, two seconds apart. That is the
+  research repo's deliberate probing budget; running it repeatedly is not free
+  politeness.
+- **A network failure is not drift.** The suite needs live round trips, and a
+  timeout looks identical to a broken assertion. The research repo's own rule is
+  that only two consecutive reds count. Re-run once before believing it.
+- **The assertions are pinned to `main`.** If the research repo has moved ahead,
+  run it there rather than against a stale clone.
+
 If it ever exits non-zero, the assumptions this bridge is built on have moved,
 and the change should be read before the next release.

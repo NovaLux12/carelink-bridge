@@ -29,7 +29,7 @@ const SKIP_DIRS = new Set([
   'node_modules', 'dist', '.git', 'coverage',
   'reports', 'logs', '.tmp',
   // A gitignored local mirror of the research repo, not canonical and not on
-  // GitHub — 1176 files of it. Its README says not to cite it.
+  // GitHub, and ~1,170 files of it. Its README says not to cite it.
   'research',
 ]);
 const TEXT = /\.(md|ts|tsx|mts|js|mjs|cjs|yml|yaml|sh|json|txt|service)$/;
@@ -172,12 +172,12 @@ for (const [url, locs] of urls) {
     );
     if (!existsSync(tplAbs)) {
       console.log(`FAIL ${url}`);
-      problems.push(`${url} → issue template not found in sibling clone: ${tmpl}`);
+      problems.push(`${url} → issue template not found in sibling clone: ${tmpl}${where}`);
       continue;
     }
     if (tplTracked.status !== 0) {
       console.log(`FAIL ${url}`);
-      problems.push(`${url} → ${tmpl} exists locally but is not git-tracked`);
+      problems.push(`${url} → ${tmpl} exists locally but is not git-tracked${where}`);
       continue;
     }
     console.log(`ok   ${url}  (template checked: ${tmpl})`);
@@ -191,14 +191,14 @@ for (const [url, locs] of urls) {
       encoding: 'utf8',
     });
     const rightRepo = remote.status === 0 && remote.stdout.trim().includes(REPO);
-    console.log(`${rightRepo ? 'ok  ' : 'FAIL'} ${url}  (repo root, checked via origin remote)`);
-    if (!rightRepo) problems.push(`${url} → sibling clone's origin is not ${REPO} (${remote.stdout.trim() || 'unknown'})`);
+    console.log(`${rightRepo ? 'ok  ' : 'FAIL'} ${url}  (no file path; sibling origin checked — the page itself is not verifiable offline)`);
+    if (!rightRepo) problems.push(`${url} → sibling clone's origin is not ${REPO} (${remote.stdout.trim() || 'unknown'})${where}`);
     continue;
   }
   const target = join(SIBLING, path);
   if (!existsSync(target)) {
     console.log(`FAIL ${url}`);
-    problems.push(`${url} → no such path in sibling clone: ${path}`);
+    problems.push(`${url} → no such path in sibling clone: ${path}${where}`);
     continue;
   }
   const tracked = spawnSync(
@@ -208,7 +208,7 @@ for (const [url, locs] of urls) {
   );
   if (tracked.status !== 0) {
     console.log(`FAIL ${url}`);
-    problems.push(`${url} → ${path} exists locally but is not git-tracked (would 404 on GitHub)`);
+    problems.push(`${url} → ${path} exists locally but is not git-tracked (would 404 on GitHub)${where}`);
     continue;
   }
   console.log(`ok   ${url}`);
@@ -233,8 +233,13 @@ if (problems.length) {
 
 if (unverified.length) {
   console.log(
-    `links:check PASSED — but ${unverified.length} link(s) were NOT verified (no sibling clone).\n` +
-    '  Those links are unproven, not good. Run with --online to verify them over the network.'
+    `\nlinks:check PASSED — but ${unverified.length} link(s) were NOT verified.\n` +
+    '  Those links are unproven, not good.' +
+    (ONLINE
+      ? '\n  They are issue-template links: GitHub answers 200 whether or not the template exists,\n' +
+        '  so HTTP cannot settle them. Clone the research repo alongside this one and run\n' +
+        '  `npm run links:check` without --online to check them against the real files.'
+      : '\n  Run with --online to verify them over the network.')
   );
   process.exit(0);
 }

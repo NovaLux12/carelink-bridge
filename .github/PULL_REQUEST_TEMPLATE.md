@@ -52,7 +52,11 @@ the discovery pin, the version list, device vocabulary, an error class — say s
 - [ ] Vendor change observed — filed upstream as a [finding](https://github.com/NovaLux12/carelink-api-research/issues/new?template=01-new-finding.yml): <link>
 
 `npm run drift:check` (maintainer release step only — needs a sibling clone of
-the research repo plus `hurl` and `jq`; leave blank if not applicable):
+the research repo plus `hurl` and `jq`; write `n/a` if not applicable):
+
+```
+drift:check exit: __
+```
 
 ## Checklist
 
