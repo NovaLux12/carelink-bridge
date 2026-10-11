@@ -205,6 +205,14 @@ journald and points the operator at the constant to inspect.
 
 ## Notes
 
+- **Canonical version-matrix map lives in the research repo.** This ADR's
+  table is authoritative *for the bridge's pin*, but the wider cell-by-cell
+  matrix, the "what does probing a new version re-derive" result, and the
+  live re-verification history are maintained continuously in
+  [NovaLux12/carelink-api-research — `docs/03` discovery & versions](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/03-discovery-and-versions.md)
+  and pinned by its regression suite. If a future probe contradicts the
+  table above, check there first and **file the discrepancy there** (its
+  weekly drift sweep is what notices) rather than editing this ADR in place.
 - Source: `src/discovery.ts` (the file's own header comment records
   a summary of the version matrix and the verification date).
 - **Re-probed live on 2026-10-08** (23 cells, unauthenticated, both

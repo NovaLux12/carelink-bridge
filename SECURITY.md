@@ -10,6 +10,20 @@ vulnerabilities. GitHub Security Advisories are the only
 channel that guarantees a private, tracked response for
 this repo.
 
+**What goes where.** This advisory channel is for vulnerabilities
+in *this bridge's code* — the token handling, the file writes,
+the fetch loop. Two related things live elsewhere:
+
+- **An exposure in Medtronic's own surface** — a published key,
+  an internal hostname in a public artefact, an auth gap — is a
+  research finding, not a bridge bug. Report it redacted to
+  [NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research/blob/main/SECURITY.md),
+  whose
+  [security findings](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/08-security-findings.md)
+  already track these. Never paste the value itself.
+- **A login, upload, or crash failure** with an unchanged vendor
+  surface is a plain bug — use the [bug form](https://github.com/NovaLux12/carelink-bridge/issues/new?template=bug.yml).
+
 ## Threat model
 
 This bridge handles:

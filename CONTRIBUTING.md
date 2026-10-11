@@ -22,6 +22,19 @@ dependency), write an ADR in `docs/adr/` first. The
 
 1. Open an issue first for anything non-trivial (small typo
    fixes don't need an issue).
+
+   **Is it a bridge bug or a vendor observation?** This bridge is a
+   *client*; most interesting problems are not its bugs. If Medtronic
+   changed something — a route exists/doesn't, a version list moved, a
+   new country, a changed status code, a renamed field — file it in
+   **[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)**,
+   the research repo that maps and continuously re-verifies this
+   surface, using its
+   [new-finding form](https://github.com/NovaLux12/carelink-api-research/issues/new?template=01-new-finding.yml).
+   Its weekly drift sweep is what catches a change before it becomes a
+   bridge outage. Issues on this repo are for bridge behaviour. The test:
+   *if Medtronic did nothing, would it still be broken?* Yes → bridge
+   issue. No → research finding.
 2. Fork the repo, create a branch.
 3. Make the change.
 4. Make sure `npm test` and `npm run typecheck` pass. (`npx tsc --noEmit`
@@ -106,6 +119,16 @@ most useful thing you can do is:
 That gives the next maintainer something to test against
 without needing their own real pump.
 
+**If the real-data probe taught you something about the vendor
+surface** — not just about this bridge — that belongs in the research
+repo too. File it via its
+[new-finding form](https://github.com/NovaLux12/carelink-api-research/issues/new?template=01-new-finding.yml)
+and cite the `findings-log/` path it lands in from your PR, so the
+finding is pinned rather than only described. The bridge's own
+vendor claims live in
+[`docs/vendor-api/README.md`](./docs/vendor-api/README.md), which records
+which finding each source comment rests on.
+
 ## Releasing (maintainers)
 
 Version metadata must stay in sync — v0.1.1 through v0.1.3
@@ -124,9 +147,16 @@ happened. For every release:
    — the notes should match the CHANGELOG entry
    (security-relevant changes get a clear callout per
    [SECURITY.md](./SECURITY.md)).
-6. Check ROADMAP.md — a phase marked "shipped" must have
+6. **Run the vendor-surface regression suite: `npm run drift:check`.**
+   It executes
+   [`regression/hurl/run.sh`](https://github.com/NovaLux12/carelink-api-research/blob/main/regression/hurl/run.sh)
+   from a sibling clone of the research repo. A non-zero exit means
+   Medtronic moved something under us and **blocks the release** — read
+   [`docs/vendor-api/README.md`](./docs/vendor-api/README.md) before
+   tagging anything.
+7. Check ROADMAP.md — a phase marked "shipped" must have
    a matching tag and release.
-7. If a new architectural decision was made in this
+8. If a new architectural decision was made in this
    release, the ADR should already exist in `docs/adr/`.
    Confirm the index table is up to date.
 

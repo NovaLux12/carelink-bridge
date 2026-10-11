@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "drift:check": "node -e \"const fs=require('fs');const p='../carelink-api-research/regression/hurl/run.sh';if(!fs.existsSync(p)){console.error('sister repo not found at ../carelink-api-research — clone it next to this one:');console.error('  git clone https://github.com/NovaLux12/carelink-api-research.git');process.exit(2)}const r=require('child_process').spawnSync(p,[],{stdio:'inherit',env:{...process.env,DELAY_MS:process.env.DELAY_MS||'2000'}});if(r.error){console.error(String(r.error.message));process.exit(2)}process.exit(r.status===null?1:r.status)\"",
+    "links:check": "node scripts/check-links.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "engines": {
