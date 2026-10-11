@@ -23,7 +23,8 @@ the research repo records the evidence. It matches devices on a **BLE/SIMPLERA
 family prefix**, plus the single published family token `CC880` (which the
 vendor's own config maps to "MiniMed™ Flex"), plus a loose `FLEX` fallback, and
 falls back to **model prefix** — because the family spelling is demonstrably
-inconsistent across responses. And it tries several API versions per data endpoint, because the
+inconsistent across responses. And it tries several API versions per data
+endpoint, because the
 country-settings config hands out a legacy `v6` route while the app advertises
 `v13`.
 
@@ -47,9 +48,10 @@ Four things to know before you run either:
   which is *not* the same as drift. `npm run drift:check` separates the two and
   exits 2 with install hints.
 - **It sends live traffic to Medtronic's production servers** — around 60
-  read-only requests across seven hosts, two seconds apart. That is the
-  research repo's deliberate probing budget; running it repeatedly is not free
-  politeness.
+  read-only requests across nine hosts, two seconds apart (two of the
+  requests are POSTs, pinned in `04-deep-surface.hurl` and expected to be
+  refused). That is the research repo's deliberate probing budget; running
+  it repeatedly is not free politeness.
 - **A network failure is not drift.** The suite needs live round trips, and a
   timeout looks identical to a broken assertion. The research repo's own rule is
   that only two consecutive reds count. Re-run once before believing it.

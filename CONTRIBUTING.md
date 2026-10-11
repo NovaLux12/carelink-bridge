@@ -149,13 +149,14 @@ happened. For every release:
    moved something under us, and tagging a release that is already broken
    would make the tag the published record of it.
 
-   Two things to know before you run it. It **sends live unauthenticated
-   traffic to Medtronic's production servers** — around 60 requests across
-   seven hosts, read-only, two seconds apart. That is the research repo's
-   deliberate probing budget, and running it more than once per release is
-   not free politeness. And it needs a network round trip, so a **network
-   failure is not drift**: the sweep's own rule is that only two consecutive
-   reds count, because CI network failures look exactly like vendor drift.
+   Two things to know before you run it. It **sends live traffic to
+   Medtronic's production servers** — around 60 requests across nine
+   hosts, two seconds apart, read-only apart from two pinned POSTs. That
+   is the research repo's deliberate probing budget, and running it more
+   than once per release is not free politeness. And it needs a network
+   round trip, so a **network failure is not drift**: the sweep's own
+   rule is that only two consecutive reds count, because CI network
+   failures look exactly like vendor drift.
    If it fails, re-run once; if it fails again, read
    [`docs/vendor-api/README.md`](./docs/vendor-api/README.md), decide with
    the evidence, and only then proceed.
