@@ -38,6 +38,26 @@ The fork should only carry changes that landed in or were submitted upstream.
 - [ ] No divergence — the change is also applicable to (or already submitted to) upstream
 - [ ] Diverges from upstream — see explanation above
 
+## Vendor-surface impact
+
+<!--
+Medtronic publishes no API documentation, so every claim about it rests on
+[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research).
+If this PR changes, adds, or re-verifies a vendor claim — a route, a status code,
+the discovery pin, the version list, device vocabulary, an error class — say so.
+-->
+
+- [ ] No vendor-surface change (pure bridge logic)
+- [ ] Vendor claim checked against the [research map](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md)
+- [ ] Vendor change observed — filed upstream as a [finding](https://github.com/NovaLux12/carelink-api-research/issues/new?template=01-new-finding.yml): <link>
+
+`npm run drift:check` (maintainer release step only — needs a sibling clone of
+the research repo plus `hurl` and `jq`; write `n/a` if not applicable):
+
+```
+drift:check exit: __
+```
+
 ## Checklist
 
 - [ ] My change matches the contribution guidelines in CONTRIBUTING.md

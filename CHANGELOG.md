@@ -152,6 +152,15 @@ A research pass into CareLink's live API surface, followed by the fixes
 it produced. The branch is one squashed commit carrying both the code and
 the documentation changes, so this entry covers both.
 
+The underlying evidence for this pass — and every claim in it — is filed in
+the sister research repo,
+**[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)**
+([start with the map](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md),
+dated findings in
+[`findings-log/`](https://github.com/NovaLux12/carelink-api-research/tree/main/findings-log)).
+That repo is re-verified continuously, so a drift found after this entry
+should be reported there, not here.
+
 Every CareLink fact below was verified live on 2026-10-08 unless it is
 labelled **INFERRED** (from a third-party client or Medtronic's own
 published assets) or **UNVERIFIED** (needs a real CareLink credential).

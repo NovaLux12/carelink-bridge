@@ -273,7 +273,10 @@ The full 23-cell matrix, the two orthogonal axes of the discovery URL,
 and the guard that must check the cumulus track rather than the mere
 presence of the config key are in
 [ADR 0002](./adr/0002-discovery-app-version-pin.md). The verification
-date is in the constant's own header comment.
+date is in the constant's own header comment. The wider matrix, and the
+evidence that probing a newer cell re-derives a known document rather than
+revealing a new API, is maintained continuously in the research repo's
+[discovery & versions page](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/03-discovery-and-versions.md).
 
 ### Discovery-document tripwires (issue #77)
 
@@ -592,6 +595,13 @@ returns 412, and an invalid bearer returns a clean JSON refusal. The
 portal's public JS bundle also ships a hardcoded key present in the
 vendor's public bundle, tracked privately; that value is **not**
 reproduced in this repository.
+
+Vendor-side detail — the brokers, the AWS gateways behind them, and the
+CloudFront origin failure on the metadata broker — is mapped in the
+research repo's
+[admin portal & reporting page](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/07-admin-portal-and-reporting.md),
+with the credential-handling posture in its
+[security findings page](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/08-security-findings.md).
 
 If it is ever integrated it must stay **opt-in and off by default** —
 this is a second, much larger data surface than the fetch loop and

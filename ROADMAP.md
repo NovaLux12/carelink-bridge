@@ -202,7 +202,8 @@ refusal). If it is ever wired in it must stay **opt-in and
 off by default**: it is a second, much larger data surface
 than the fetch loop. Details in
 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface)
-("Reports API").
+("Reports API"); the vendor-side host and gateway evidence is in
+[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/07-admin-portal-and-reporting.md).
 
 ## v0.3.0 — reliability (shipped 2026-09-09, #58)
 
@@ -285,6 +286,8 @@ this bridge actually uses is **unverified**, and a second
 identity is not buildable on top of an unverified one. That
 is the second of the two cheapest authenticated checks in
 [Pre-pump authenticated checks](#pre-pump-authenticated-checks-cheapest-first).
+The namespace comparison itself is mapped in
+[carelink-api-research docs/02 §4 "What a client must actually use"](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/02-auth-tenants-and-flows.md#4-what-a-client-must-actually-use).
 The multi-patient fan-out fixture item is also one of the
 things the reports API might unblock — see the v0.2.0
 maintenance note above.
@@ -299,7 +302,9 @@ cheapest checks that need a real account token, in order:
    flow still work at all? It exercises discovery → PKCE → token
    exchange → refresh, and it is the only check that catches an Auth0
    drift before it becomes a November emergency. It needs no data fetch
-   and no pump.
+   and no pump. The pin's evidence and the family fallback
+   (`3.7`/`3.8`) are in
+   [carelink-api-research docs/03](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/03-discovery-and-versions.md).
 2. **`GET /api/carepartner/v2/users/me` vs `GET /patient/users/me`.**
    Both answer `401` without a token, so **which one actually returns
    data with a valid token is unknown** — and that is the open question
@@ -336,6 +341,17 @@ blocked on a real pump or a real capture.
 ## Tracking
 
 Active open work, cross-referenced from issues:
+
+> **Vendor-surface source of truth.** Facts about CareLink itself
+> (which routes exist, which versions answer, what changed since
+> this roadmap was written) live in
+> **[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)** —
+> [start with the map](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md),
+> pick future work from
+> [docs/11 suggested areas](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/11-suggested-research-areas.md).
+> Its weekly drift sweep opens issues there when the surface
+> moves; bridge issue #76 mirrors the reports-API lead, and
+> #12 tracks what a real token settles.
 
 | Item | Issue | Status |
 |------|-------|--------|

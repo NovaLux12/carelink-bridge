@@ -19,7 +19,9 @@ uploading what it gets.
 > [`docs/vendor-api/README.md`](./docs/vendor-api/README.md) records which finding
 > each one rests on. **Go there first** when debugging a fetch failure, checking
 > whether a route still exists, or changing how this bridge talks to CareLink —
-> and report what you find there, where a drift sweep will notice it.
+> and report what you find there, where a
+> [drift sweep](https://github.com/NovaLux12/carelink-api-research/blob/main/.github/workflows/drift-sweep.yml)
+> will notice it.
 
 > **How close is this to the official app?** The **data** path is the
 > same one the official CareLink app uses — the bridge takes its login

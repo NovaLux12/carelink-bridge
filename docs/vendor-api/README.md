@@ -19,10 +19,12 @@ reverse-engineering that informed this fork's behaviour is published separately:
 The bridge pins `android/3.6` because that is one of only three discovery cells
 (`3.6`, `3.7`, `3.8`) that select **both** Auth0 **and** cumulus v13 — issue
 [ADR 0002](../adr/0002-discovery-app-version-pin.md) records the reasoning, and
-the research repo records the evidence. It matches devices on **model prefix**
-rather than family token, because the vendor's own published family list does not
-contain the token their app matches on and the family spelling is demonstrably
-inconsistent. And it tries several API versions per data endpoint, because the
+the research repo records the evidence. It matches devices on a **BLE/SIMPLERA
+family prefix**, plus the single published family token `CC880` (which the
+vendor's own config maps to "MiniMed™ Flex"), plus a loose `FLEX` fallback, and
+falls back to **model prefix** — because the family spelling is demonstrably
+inconsistent across responses. And it tries several API versions per data
+endpoint, because the
 country-settings config hands out a legacy `v6` route while the app advertises
 `v13`.
 
@@ -36,6 +38,25 @@ git clone https://github.com/NovaLux12/carelink-api-research
 cd carelink-api-research/regression/hurl
 ./run.sh          # exit 0 = the vendor surface has not drifted
 ```
+
+From this repo, `npm run drift:check` runs the same suite and checks its
+prerequisites first.
+
+Four things to know before you run either:
+
+- **It needs `hurl` and `jq`.** A missing tool makes the suite exit non-zero,
+  which is *not* the same as drift. `npm run drift:check` separates the two and
+  exits 2 with install hints.
+- **It sends live traffic to Medtronic's production servers** — around 60
+  read-only requests across nine hosts, two seconds apart (two of the
+  requests are POSTs, pinned in `04-deep-surface.hurl` and expected to be
+  refused). That is the research repo's deliberate probing budget; running
+  it repeatedly is not free politeness.
+- **A network failure is not drift.** The suite needs live round trips, and a
+  timeout looks identical to a broken assertion. The research repo's own rule is
+  that only two consecutive reds count. Re-run once before believing it.
+- **The assertions are pinned to `main`.** If the research repo has moved ahead,
+  run it there rather than against a stale clone.
 
 If it ever exits non-zero, the assumptions this bridge is built on have moved,
 and the change should be read before the next release.

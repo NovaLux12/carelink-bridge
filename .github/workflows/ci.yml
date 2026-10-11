@@ -21,3 +21,15 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  cross-links:
+    # Every vendor claim in this repo cites NovaLux12/carelink-api-research.
+    # Those links float on `main`, so a rename on that side would silently
+    # 404 them. This makes the breakage loud at PR time.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm run links:check -- --online
