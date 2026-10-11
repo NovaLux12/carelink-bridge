@@ -318,6 +318,14 @@ silently.
 
 ## Live CareLink API surface
 
+> **Canonical source:** this section is a **snapshot, not a live map**. The
+> continuously re-verified version — with a drift sweep, ~96 pinned regression
+> assertions, and per-claim evidence classes — lives in
+> **[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)**
+> (start at its [`docs/00-summary-the-map.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md)).
+> **If the two disagree, the research repo is current.** Please report drift
+> there rather than editing this section — this file is not watched by the sweep.
+
 Everything in this section was **verified live on 2026-10-08** against
 `clcloud.minimed.{eu,com}` and `carelink.minimed.{eu,com}` with a
 read-only, unauthenticated, low-rate probe (~1.2s between requests, no

@@ -10,6 +10,17 @@ Sends your Medtronic pump and CGM data to [Nightscout](http://www.nightscout.inf
 automatically, by logging into Medtronic's CareLink servers and
 uploading what it gets.
 
+> **Medtronic publishes no API documentation.** The surface this bridge
+> talks to is reverse-engineered, and the map of it lives in a separate,
+> continuously re-verified repo: **[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)**.
+> It carries per-claim evidence classes, a drift sweep and pinned
+> regression assertions. **Start there** if you are debugging a fetch
+> failure, checking whether a route still exists, or changing how this
+> bridge talks to CareLink — and report what you find there, not in this
+> repo. The short version of the map is also in
+> [docs/ARCHITECTURE.md § Live CareLink API surface](./docs/ARCHITECTURE.md#live-carelink-api-surface),
+> which is a dated snapshot rather than the canonical source.
+
 > **How close is this to the official app?** The **data** path is the
 > same one the official CareLink app uses — the bridge takes its login
 > configuration from the same discovery document and posts to the same
