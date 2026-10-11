@@ -141,19 +141,21 @@ happened. For every release:
 2. Move the `[Unreleased]` items in CHANGELOG.md into a new
    dated version section and update the compare links at the
    bottom.
-3. Merge those changes via PR like any other.
-4. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."`
+3. **Run the vendor-surface regression suite: `npm run drift:check`.**
+   It executes
+   [`regression/hurl/run.sh`](https://github.com/NovaLux12/carelink-api-research/blob/main/regression/hurl/run.sh)
+   from a sibling clone of the research repo. **Do this before you tag** —
+   a non-zero exit means Medtronic moved something under us, and tagging a
+   release that is already broken would make the tag the published record of
+   it. If it fails, read
+   [`docs/vendor-api/README.md`](./docs/vendor-api/README.md), decide with
+   the evidence, and only then proceed.
+4. Merge those changes via PR like any other.
+5. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+6. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."`
    — the notes should match the CHANGELOG entry
    (security-relevant changes get a clear callout per
    [SECURITY.md](./SECURITY.md)).
-6. **Run the vendor-surface regression suite: `npm run drift:check`.**
-   It executes
-   [`regression/hurl/run.sh`](https://github.com/NovaLux12/carelink-api-research/blob/main/regression/hurl/run.sh)
-   from a sibling clone of the research repo. A non-zero exit means
-   Medtronic moved something under us and **blocks the release** — read
-   [`docs/vendor-api/README.md`](./docs/vendor-api/README.md) before
-   tagging anything.
 7. Check ROADMAP.md — a phase marked "shipped" must have
    a matching tag and release.
 8. If a new architectural decision was made in this

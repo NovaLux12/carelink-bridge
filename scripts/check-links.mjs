@@ -14,6 +14,7 @@
 // one is present, plus a checked-in snapshot. CI runs it with --online.
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,33 +86,68 @@ if (urls.size === 0) {
 console.log(`links:check — ${urls.size} distinct ${REPO} URLs across ${files.length} files\n`);
 
 const problems = [];
+const unverified = [];
 const haveSibling = existsSync(SIBLING);
 
 for (const [url, locs] of urls) {
   const path = targetPath(url);
   const where = `  referenced by: ${locs.slice(0, 3).join(', ')}${locs.length > 3 ? ` (+${locs.length - 3} more)` : ''}`;
 
-  if (path === null) {
-    if (ONLINE) {
+  // --- Online mode: verify EVERY url over the network, path or not. This is
+  // the CI configuration, and it must not silently skip blob/tree links just
+  // because there is no sibling clone on the runner.
+  if (ONLINE) {
+    let status = 0;
+    let detail = '';
+    try {
       const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
-      const ok = res.status >= 200 && res.status < 400;
-      console.log(`${ok ? 'ok  ' : 'FAIL'} ${url}`);
-      if (!ok) problems.push(`${url} → HTTP ${res.status}`);
-    } else {
-      console.log(`skip ${url}  (addresses the repo itself; only checked with --online)`);
+      status = res.status;
+    } catch (e) {
+      detail = ` (${e.message})`;
     }
+    const ok = status >= 200 && status < 400;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${url}`);
+    if (!ok) problems.push(`${url} → HTTP ${status}${detail}`);
     continue;
   }
 
-  // Offline: resolve against a local sibling clone if there is one.
-  if (haveSibling) {
-    const target = join(SIBLING, path);
-    const exists = existsSync(target);
-    console.log(`${exists ? 'ok  ' : 'FAIL'} ${url}`);
-    if (!exists) problems.push(`${url} → no such path in sibling clone: ${path}`);
-  } else {
-    console.log(`skip ${url}  (no sibling clone; only checked with --online)`);
+  // --- Offline mode: resolve against a sibling clone, and additionally
+  // require the target to be git-TRACKED. A file that exists in a working tree
+  // but is untracked or gitignored 404s on GitHub — that is precisely the
+  // breakage this gate exists to catch.
+  if (!haveSibling) {
+    unverified.push(url);
+    console.log(`SKIP ${url}  (no sibling clone; pass --online to verify over the network)`);
+    continue;
   }
+  // A repo-root (or issues/new) URL has no file path to stat offline. Check the
+  // clone is actually the repo we think it is, rather than passing it silently.
+  if (path === null) {
+    const remote = spawnSync('git', ['-C', SIBLING, 'remote', 'get-url', 'origin'], {
+      encoding: 'utf8',
+    });
+    const rightRepo = remote.status === 0 && remote.stdout.trim().includes(REPO);
+    console.log(`${rightRepo ? 'ok  ' : 'FAIL'} ${url}  (repo root, checked via origin remote)`);
+    if (!rightRepo) problems.push(`${url} → sibling clone's origin is not ${REPO} (${remote.stdout.trim() || 'unknown'})`);
+    continue;
+  }
+  const target = join(SIBLING, path);
+  if (!existsSync(target)) {
+    console.log(`FAIL ${url}`);
+    problems.push(`${url} → no such path in sibling clone: ${path}`);
+    continue;
+  }
+  const tracked = spawnSync(
+    'git',
+    ['-C', SIBLING, 'ls-files', '--error-unmatch', path.replace(/^\//, '')],
+    { encoding: 'utf8' }
+  );
+  if (tracked.status !== 0) {
+    console.log(`FAIL ${url}`);
+    problems.push(`${url} → ${path} exists locally but is not git-tracked (would 404 on GitHub)`);
+    continue;
+  }
+  console.log(`ok   ${url}`);
 }
 
 console.log('');
@@ -125,13 +161,12 @@ if (problems.length) {
   process.exit(1);
 }
 
-if (!ONLINE && !haveSibling) {
+if (unverified.length) {
   console.log(
-    'links:check — offline mode with no sibling clone, so path targets were NOT verified.\n' +
-    '  Clone it next to this repo (`git clone https://github.com/NovaLux12/carelink-api-research.git`)\n' +
-    '  or run with --online to verify over the network.'
+    `links:check PASSED — but ${unverified.length} link(s) were NOT verified (no sibling clone).\n` +
+    '  Those links are unproven, not good. Run with --online to verify them over the network.'
   );
   process.exit(0);
 }
 
-console.log('links:check PASSED — every cross-repo link resolves.');
+console.log('links:check PASSED — every cross-repo link verified.');
