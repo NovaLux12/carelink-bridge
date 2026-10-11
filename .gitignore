@@ -13,6 +13,12 @@ state.json
 # The local notes stay gitignored because they carry material that must not
 # be published (vendor API keys, internal hostnames, raw archive captures).
 # The published repo is the citable surface; source comments link into it.
+#
+# The rule below is load-bearing, not documentation. PR #99 replaced the
+# `research/` rule with the comment above and dropped the rule itself, which
+# left 1,170 files - including jsessionid_ and .corp hostname hits from the
+# scrub list - stageable by a plain `git add -A`. Restored here.
+research/
 
 # macOS Finder artifacts (also created by some Linux/Windows tools when
 # editing files on a shared filesystem). Not source.
