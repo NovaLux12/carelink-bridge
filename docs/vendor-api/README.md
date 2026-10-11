@@ -19,10 +19,11 @@ reverse-engineering that informed this fork's behaviour is published separately:
 The bridge pins `android/3.6` because that is one of only three discovery cells
 (`3.6`, `3.7`, `3.8`) that select **both** Auth0 **and** cumulus v13 — issue
 [ADR 0002](../adr/0002-discovery-app-version-pin.md) records the reasoning, and
-the research repo records the evidence. It matches devices on **model prefix**
-rather than family token, because the vendor's own published family list does not
-contain the token their app matches on and the family spelling is demonstrably
-inconsistent. And it tries several API versions per data endpoint, because the
+the research repo records the evidence. It matches devices on a **BLE/SIMPLERA
+family prefix**, plus the single published family token `CC880` (which the
+vendor's own config maps to "MiniMed™ Flex"), plus a loose `FLEX` fallback, and
+falls back to **model prefix** — because the family spelling is demonstrably
+inconsistent across responses. And it tries several API versions per data endpoint, because the
 country-settings config hands out a legacy `v6` route while the app advertises
 `v13`.
 

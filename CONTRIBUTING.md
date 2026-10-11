@@ -144,10 +144,19 @@ happened. For every release:
 3. **Run the vendor-surface regression suite: `npm run drift:check`.**
    It executes
    [`regression/hurl/run.sh`](https://github.com/NovaLux12/carelink-api-research/blob/main/regression/hurl/run.sh)
-   from a sibling clone of the research repo. **Do this before you tag** —
-   a non-zero exit means Medtronic moved something under us, and tagging a
-   release that is already broken would make the tag the published record of
-   it. If it fails, read
+   from a sibling clone of the research repo, and needs `hurl` and `jq`
+   installed. **Do this before you tag** — a non-zero exit means Medtronic
+   moved something under us, and tagging a release that is already broken
+   would make the tag the published record of it.
+
+   Two things to know before you run it. It **sends live unauthenticated
+   traffic to Medtronic's production servers** — around 60 requests across
+   seven hosts, read-only, two seconds apart. That is the research repo's
+   deliberate probing budget, and running it more than once per release is
+   not free politeness. And it needs a network round trip, so a **network
+   failure is not drift**: the sweep's own rule is that only two consecutive
+   reds count, because CI network failures look exactly like vendor drift.
+   If it fails, re-run once; if it fails again, read
    [`docs/vendor-api/README.md`](./docs/vendor-api/README.md), decide with
    the evidence, and only then proceed.
 4. Merge those changes via PR like any other.

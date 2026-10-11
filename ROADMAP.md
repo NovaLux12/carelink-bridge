@@ -287,7 +287,7 @@ identity is not buildable on top of an unverified one. That
 is the second of the two cheapest authenticated checks in
 [Pre-pump authenticated checks](#pre-pump-authenticated-checks-cheapest-first).
 The namespace comparison itself is mapped in
-[carelink-api-research docs/02 §4 "What a client must use"](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/02-auth-tenants-and-flows.md).
+[carelink-api-research docs/02 §4 "What a client must actually use"](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/02-auth-tenants-and-flows.md#4-what-a-client-must-actually-use).
 The multi-patient fan-out fixture item is also one of the
 things the reports API might unblock — see the v0.2.0
 maintenance note above.

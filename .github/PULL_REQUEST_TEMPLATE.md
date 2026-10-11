@@ -51,7 +51,8 @@ the discovery pin, the version list, device vocabulary, an error class — say s
 - [ ] Vendor claim checked against the [research map](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/00-summary-the-map.md)
 - [ ] Vendor change observed — filed upstream as a [finding](https://github.com/NovaLux12/carelink-api-research/issues/new?template=01-new-finding.yml): <link>
 
-`npm run drift:check` exit code (vendor regression suite):
+`npm run drift:check` (maintainer release step only — needs a sibling clone of
+the research repo plus `hurl` and `jq`; leave blank if not applicable):
 
 ## Checklist
 

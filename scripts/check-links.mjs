@@ -23,12 +23,22 @@ const SIBLING = resolve(ROOT, '..', 'carelink-api-research');
 const REPO = 'NovaLux12/carelink-api-research';
 const ONLINE = process.argv.includes('--online');
 
-const SCAN_DIRS = ['.', 'docs', 'src', 'test', 'deploy', '.github'];
+// Walk the whole tree once. Naming subdirectories here alongside '.' would scan
+// most of the repo twice and inflate the file count we report.
 const SKIP_DIRS = new Set([
-  'node_modules', 'dist', '.git', 'research', 'coverage',
+  'node_modules', 'dist', '.git', 'coverage',
   'reports', 'logs', '.tmp',
+  // A gitignored local mirror of the research repo, not canonical and not on
+  // GitHub — 1176 files of it. Its README says not to cite it.
+  'research',
 ]);
-const TEXT = /\.(md|ts|tsx|mts|js|mjs|cjs|yml|yaml|sh|json|txt)$/;
+const TEXT = /\.(md|ts|tsx|mts|js|mjs|cjs|yml|yaml|sh|json|txt|service)$/;
+// Extensionless files that are tracked and worth scanning — `.gitignore` in
+// particular carries a live cross-repo URL in a comment.
+const BARE_FILES = new Set([
+  '.gitignore', '.dockerignore', 'Dockerfile', 'LICENSE',
+  'CODEOWNERS', '.env.example',
+]);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -36,14 +46,17 @@ function* walk(dir) {
     const full = join(dir, entry);
     const st = statSync(full);
     if (st.isDirectory()) yield* walk(full);
-    else if (TEXT.test(entry)) yield full;
+    else if (TEXT.test(entry) || BARE_FILES.has(entry)) yield full;
   }
 }
 
 function extract(files) {
   const found = new Map(); // url -> [locations]
   const re = new RegExp(
-    `https://github\\.com/${REPO}(?:/(?:blob|tree)/[A-Za-z0-9._-]+)?(/[^\\s)\\]>"\`]*)?`,
+    // (?![\w.-]) stops the match running past the repo name, so a link to
+    // `carelink-api-research-archive` is not silently truncated to `…research`
+    // (which resolves, hiding a 404).
+    `https://github\\.com/${REPO}(?![\\w.-])(?:/(?:blob|tree)/[A-Za-z0-9._-]+)?(/[^\\s)\\]>"\`]*)?`,
     'g'
   );
   for (const file of files) {
@@ -60,21 +73,20 @@ function extract(files) {
 }
 
 // Map a cross-repo URL to the path it should exist at inside the sibling.
-// Returns null for URLs that address the repo itself (root, issues/new, etc.),
-// which can only be verified over the network.
+// Strips any #fragment or ?query first — those are not part of the path, and
+// leaving them in makes `docs/x.md#section` fail a check that is really about
+// a rename. Returns null for URLs that address the repo or its issue tracker
+// rather than a file, which cannot be path-checked offline.
 function targetPath(url) {
-  const m = url.match(
-    new RegExp(`^https://github\\.com/${REPO}/(?:blob|tree)/[^/]+(/.*)$`)
+  const bare = url.split('#')[0].split('?')[0];
+  const m = bare.match(
+    new RegExp(`^https://github\\.com/${REPO}(?![\\w.-])/(?:blob|tree)/[^/]+(/.*)$`)
   );
   if (m) return m[1];
   return null;
 }
 
-const files = [];
-for (const d of SCAN_DIRS) {
-  const full = join(ROOT, d);
-  if (existsSync(full) && statSync(full).isDirectory()) files.push(...walk(full));
-}
+const files = [...walk(ROOT)];
 
 const urls = extract(files);
 
@@ -87,7 +99,19 @@ console.log(`links:check — ${urls.size} distinct ${REPO} URLs across ${files.l
 
 const problems = [];
 const unverified = [];
+let networkErrors = 0;
 const haveSibling = existsSync(SIBLING);
+
+// A `?template=` URL points at GitHub's issue-form router, which returns 200
+// whether or not the named template exists (it falls back to a blank form or a
+// login redirect). Folding those into a normal HTTP check would report every
+// contributor-funnel link as good regardless of whether the template is real.
+// Instead, extract the template name and require it to exist on the sibling, so
+// a renamed/deleted issue form is actually caught offline.
+function templateTarget(url) {
+  const m = url.match(new RegExp(`^https://github\\.com/${REPO}/issues/new\\?template=([^&]+)`));
+  return m ? `.github/ISSUE_TEMPLATE/${m[1]}` : null;
+}
 
 for (const [url, locs] of urls) {
   const path = targetPath(url);
@@ -97,17 +121,33 @@ for (const [url, locs] of urls) {
   // the CI configuration, and it must not silently skip blob/tree links just
   // because there is no sibling clone on the runner.
   if (ONLINE) {
+    const tmpl = templateTarget(url);
     let status = 0;
     let detail = '';
     try {
-      const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+      // Bound every request. A hung connection would otherwise occupy the CI
+      // job for GitHub's default 6-hour limit, and a DNS blip is
+      // indistinguishable from a broken link unless we separate the two.
+      const res = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(20_000),
+      });
       status = res.status;
     } catch (e) {
-      detail = ` (${e.message})`;
+      detail = ` (network error, not a verdict on the link: ${e.message})`;
+      networkErrors++;
+    }
+    // A 200 here does not prove the template exists — GitHub answers 200 for a
+    // bogus `?template=` too — so say so rather than letting it read as verified.
+    if (tmpl && status >= 200 && status < 400) {
+      unverified.push(url);
+      console.log(`SKIP ${url}  (HTTP ${status} does not prove the issue template exists — pass offline to check it)`);
+      continue;
     }
     const ok = status >= 200 && status < 400;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${url}`);
-    if (!ok) problems.push(`${url} → HTTP ${status}${detail}`);
+    console.log(`${ok ? 'ok  ' : status === 0 ? 'NET ' : 'FAIL'} ${url}`);
+    if (!ok) problems.push(`${url} → HTTP ${status}${detail}${where}`);
     continue;
   }
 
@@ -120,8 +160,32 @@ for (const [url, locs] of urls) {
     console.log(`SKIP ${url}  (no sibling clone; pass --online to verify over the network)`);
     continue;
   }
-  // A repo-root (or issues/new) URL has no file path to stat offline. Check the
-  // clone is actually the repo we think it is, rather than passing it silently.
+  // An `?template=` URL does have a file to check offline — the issue form
+  // itself. GitHub's HTTP status can't prove it exists, but the sibling clone can.
+  const tmpl = templateTarget(url);
+  if (tmpl) {
+    const tplAbs = join(SIBLING, tmpl);
+    const tplTracked = spawnSync(
+      'git',
+      ['-C', SIBLING, 'ls-files', '--error-unmatch', tmpl],
+      { encoding: 'utf8' }
+    );
+    if (!existsSync(tplAbs)) {
+      console.log(`FAIL ${url}`);
+      problems.push(`${url} → issue template not found in sibling clone: ${tmpl}`);
+      continue;
+    }
+    if (tplTracked.status !== 0) {
+      console.log(`FAIL ${url}`);
+      problems.push(`${url} → ${tmpl} exists locally but is not git-tracked`);
+      continue;
+    }
+    console.log(`ok   ${url}  (template checked: ${tmpl})`);
+    continue;
+  }
+
+  // A repo-root URL has no file path to stat offline. Check the clone is
+  // actually the repo we think it is, rather than passing it silently.
   if (path === null) {
     const remote = spawnSync('git', ['-C', SIBLING, 'remote', 'get-url', 'origin'], {
       encoding: 'utf8',
@@ -155,6 +219,12 @@ console.log('');
 if (problems.length) {
   console.error(`links:check FAILED — ${problems.length} broken cross-repo link(s):\n`);
   for (const p of problems) console.error(`  ${p}`);
+  if (networkErrors) {
+    console.error(
+      `\nNote: ${networkErrors} of these are network errors, not 404s. A transient DNS/TLS\n` +
+      'failure looks identical to a broken link — re-run before acting on them.'
+    );
+  }
   console.error(
     '\nIf the target was renamed on the research side, update every reference here.'
   );
