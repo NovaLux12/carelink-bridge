@@ -18,7 +18,7 @@ import { data } from './fixtures.js';
  * to Nightscout /api/v1/treatments.json.
  */
 
-function alarmFixture(overrides?: Partial<{ code: number; datetime: string }>): CareLinkData['lastAlarm'] {
+function alarmFixture(overrides?: Partial<{ code: number | string; datetime: string }>): CareLinkData['lastAlarm'] {
   return {
     type: 'ALARM',
     version: 1,
@@ -64,6 +64,80 @@ describe('evaluateLastAlarm', () => {
     expect(evaluateLastAlarm(undefined)).toBeNull();
     // @ts-expect-error — runtime guard, intentional shape mismatch
     expect(evaluateLastAlarm({ ...alarmFixture(), code: 'four' })).toBeNull();
+  });
+
+  // Issue #84 — NGP "N"-prefixed string form. The unauthenticated search
+  // for the codes' canonical form is exhausted; the wire form that 780G
+  // pumps send is unverified. Both forms must be accepted so neither
+  // silently drops a "Critical Pump Error".
+  it('normalises NGP "N24" string code to stop_using_pump severity (#84)', () => {
+    const result = evaluateLastAlarm(alarmFixture({ code: 'N24' }));
+    expect(result).not.toBeNull();
+    expect(result!.severity).toBe('stop_using_pump');
+    expect(result!.annotation.severity).toBe('stop_using_pump');
+    // Canonical numeric form is what downstream Nightscout consumers see.
+    expect(result!.annotation.code).toBe(24);
+    // Original wire form is preserved for operator-visible logging.
+    expect(result!.annotation.wireCode).toBe('N24');
+    expect(result!.wireCode).toBe('N24');
+    expect(result!.text).toBe('Critical Pump Error. Stop using pump');
+  });
+
+  it('classifies every NGP stop_using_pump code (mddub a95dc120d9d1414a433d, #84)', () => {
+    for (const code of [24, 35, 40, 47, 48, 50, 55, 131] as const) {
+      // Both the numeric wire form and the "N"-prefixed string form.
+      for (const wireForm of [code, `N${code}`, `n${code}`] as const) {
+        const result = evaluateLastAlarm(alarmFixture({ code: wireForm }));
+        expect(result, `code=${JSON.stringify(wireForm)}`).not.toBeNull();
+        expect(result!.severity, `code=${JSON.stringify(wireForm)}`).toBe('stop_using_pump');
+        expect(result!.annotation.code, `code=${JSON.stringify(wireForm)}`).toBe(code);
+      }
+    }
+  });
+
+  it('classifies NGP delivery-stopped codes as delivery_stopped (#84)', () => {
+    // The NGP-era additions; paradigm-era codes are already covered above.
+    for (const code of [1, 22, 25, 33, 42, 63, 67, 76, 77, 130] as const) {
+      for (const wireForm of [code, `N${code}`] as const) {
+        const result = evaluateLastAlarm(alarmFixture({ code: wireForm }));
+        expect(result, `code=${JSON.stringify(wireForm)}`).not.toBeNull();
+        expect(result!.severity, `code=${JSON.stringify(wireForm)}`).toBe('delivery_stopped');
+      }
+    }
+  });
+
+  it('parses plain numeric strings leniently (issue #84 regression)', () => {
+    // A stringified paradigm code is a real alarm, not junk — surface it
+    // rather than silently drop it.
+    const result = evaluateLastAlarm(alarmFixture({ code: '4' }));
+    expect(result).not.toBeNull();
+    expect(result!.annotation.code).toBe(4);
+    expect(result!.severity).toBe('delivery_stopped');
+    expect(result!.annotation.wireCode).toBe('4');
+  });
+
+  it('rejects malformed NGP strings (issue #84 regression)', () => {
+    // Anchored /^N(\d+)$/ — partial matches, negatives, junk must still
+    // return null rather than silently firing a wrong-severity WARN.
+    for (const code of ['N24x', 'N-1', 'N', 'N ', 'Nab', '4.5', '-4', '']) {
+      const result = evaluateLastAlarm(alarmFixture({ code }));
+      expect(result, `code=${JSON.stringify(code)}`).toBeNull();
+    }
+  });
+
+  it('rejects non-finite numbers (issue #84 regression)', () => {
+    // NaN/Infinity would otherwise flow into the lookup tables and produce
+    // a spurious "Unknown alarm code NaN" annotation. Return null instead.
+    expect(evaluateLastAlarm(alarmFixture({ code: NaN }))).toBeNull();
+    expect(evaluateLastAlarm(alarmFixture({ code: Infinity }))).toBeNull();
+  });
+
+  it('does not set wireCode when the wire form was a number (#84)', () => {
+    // Backward compatibility — pre-existing Nightscout consumers do not see
+    // a new field appear in the JSON shape they already accepted.
+    const result = evaluateLastAlarm(alarmFixture({ code: 4 }));
+    expect(result!.annotation.wireCode).toBeUndefined();
+    expect(result!.wireCode).toBeUndefined();
   });
 });
 
@@ -154,6 +228,32 @@ describe('logLastAlarm fires console.warn for priority-1 codes', () => {
     expect(evalResult!.severity).toBe('other');
     logLastAlarm(evalResult!);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs the wire form (e.g. "N24") not just the parsed number (#84)', () => {
+    // Operator-visible journald line must show what the pump sent, so an
+    // operator investigating a "STOP USING PUMP" warning can correlate
+    // directly with the pump's event log without translating prefixes.
+    warnSpy.mockClear();
+    const evalResult = evaluateLastAlarm(alarmFixture({ code: 'N24' }));
+    expect(evalResult!.severity).toBe('stop_using_pump');
+    logLastAlarm(evalResult!);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] ?? '';
+    expect(message).toMatch(/STOP USING PUMP/);
+    expect(message).toContain('code=N24');
+    expect(message).toContain('Critical Pump Error');
+  });
+
+  it('logs the numeric form when the wire sent a number (#84)', () => {
+    warnSpy.mockClear();
+    const evalResult = evaluateLastAlarm(alarmFixture({ code: 16 }));
+    expect(evalResult!.severity).toBe('delivery_stopped');
+    logLastAlarm(evalResult!);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] ?? '';
+    expect(message).toContain('code=16');
+    expect(message).not.toMatch(/code=N16/);
   });
 });
 

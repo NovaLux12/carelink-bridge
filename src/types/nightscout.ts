@@ -9,7 +9,16 @@ export interface NightscoutSGVEntry {
 }
 
 export interface NightscoutLastAlarmAnnotation {
+  // Canonical numeric form for the alarm code. For NGP pumps whose wire
+  // form is the "N"-prefixed string ("N24" → 24), this is the parsed number;
+  // the original wire form is preserved in `wireCode` when it was a string.
+  // Widening `code` to `number | string` was avoided so downstream Nightscout
+  // consumers keep a stable numeric shape; the optional `wireCode` is
+  // additive and only set when the wire sent a non-numeric form.
   code: number;
+  // Original wire form if it was a string (NGP "N24" etc.). Absent for the
+  // numeric path so existing consumers see no schema change.
+  wireCode?: string;
   datetime: string;
   // Human-readable description from the in-repo code->text table. Always
   // present; for unknown codes, this is "Unknown alarm code <n>" so a
