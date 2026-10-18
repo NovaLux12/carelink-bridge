@@ -26,7 +26,12 @@ export interface CareLinkAlarm {
   flash: boolean;
   datetime: string;
   kind: 'Alarm';
-  code: number;
+  // Wire form. Paradigm-era pumps send a number (4, 5, 6, 16, 43, 61…);
+  // NGP-era pumps (780G, 770G) send either the same numeric form or an
+  // "N"-prefixed string ("N24", "N131"…) depending on the deployment.
+  // The exact wire form is unverified (issue #84), so the type is widened
+  // to accept either and last-alarm.ts normalises both before lookup.
+  code: number | string;
 }
 
 export interface CareLinkData {
