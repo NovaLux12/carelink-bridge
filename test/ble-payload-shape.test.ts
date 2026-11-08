@@ -134,3 +134,72 @@ describe('display/message reading shape (#111)', () => {
     expect(/2015/.test(result.entries[0].dateString)).toBe(true);
   });
 });
+
+describe('no device clock in payload (#114)', () => {
+  // v13 display/message carries neither sMedicalDeviceTime nor
+  // currentServerTime. Before this fix the offset became NaN, which
+  // propagated into every reading's date, and timestampAsString() quietly
+  // substituted new Date() — stamping every reading with the FETCH time.
+  // Nightscout accepts that, so the failure is invisible and corrupts the
+  // series. Reproduced: date NaN, dateString <now>.
+  function noClockPayload(overrides: Record<string, unknown> = {}) {
+    const base = data();
+    delete (base as Record<string, unknown>)['sMedicalDeviceTime'];
+    delete (base as Record<string, unknown>)['currentServerTime'];
+    delete (base as Record<string, unknown>)['lastMedicalDeviceDataUpdateServerTime'];
+    return {
+      ...base,
+      deviceFamily: 'INSTINCT',
+      clientTimeZoneName: 'Europe/London',
+      sgs: [
+        { sg: 7.2, timestamp: 'Nov 8, 2026 01:30:00', version: 1, timeChange: false, kind: 'SG' },
+      ],
+      ...overrides,
+    } as typeof base;
+  }
+
+  it('dates readings from their own timestamp, not from now', () => {
+    const result = transform(noClockPayload());
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].dateString).toBe('2026-11-08T01:30:00.000Z');
+  });
+
+  it('never produces the current time', () => {
+    const before = Date.now();
+    const result = transform(noClockPayload());
+    const stamped = result.entries[0].date;
+    // Must be the reading's time, and must not be within a minute of now.
+    expect(Math.abs(stamped - before)).toBeGreaterThan(60_000);
+  });
+
+  it('reports created_at from the newest reading, not from now', () => {
+    const result = transform(noClockPayload());
+    expect(result.devicestatus[0].created_at).toBe('2026-11-08T01:30:00.000Z');
+  });
+
+  it('skips the staleness gate rather than silently passing it on NaN', () => {
+    // A payload with no device clock cannot be measured for staleness. It must
+    // still yield entries — refusing the payload would discard good glucose.
+    const result = transform(noClockPayload());
+    expect(result.entries.length).toBeGreaterThan(0);
+  });
+
+  it('drops a reading whose time cannot be parsed at all', () => {
+    const payload = noClockPayload({
+      sgs: [
+        { sg: 7.2, timestamp: 'not a date', version: 1, timeChange: false, kind: 'SG' },
+        { sg: 6.8, timestamp: 'Nov 8, 2026 01:35:00', version: 1, timeChange: false, kind: 'SG' },
+      ],
+    });
+    const result = transform(payload);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].dateString).toBe('2026-11-08T01:35:00.000Z');
+  });
+
+  it('still uses the device-clock offset when the payload HAS one', () => {
+    // Legacy path must be unchanged: the offset correction still applies.
+    const result = transform(data());
+    expect(/2015/.test(result.entries[0].dateString)).toBe(true);
+    expect(Number.isNaN(result.entries[0].date)).toBe(false);
+  });
+});

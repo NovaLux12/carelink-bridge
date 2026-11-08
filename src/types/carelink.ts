@@ -51,11 +51,24 @@ export interface CareLinkData {
   sgs: CareLinkSG[];
   lastSG: CareLinkSG;
   lastSGTrend: string;
-  currentServerTime: number;
-  sMedicalDeviceTime: string;
+  currentServerTime?: number;
+  sMedicalDeviceTime?: string;
   lastMedicalDeviceDataUpdateServerTime: number;
-  medicalDeviceFamily: string;
+  /**
+   * Optional, not required: the BLE / display-message shapes may omit it and
+   * carry the family under `deviceFamily` instead. Declaring it required is
+   * what let the original crash through with no type error.
+   */
+  medicalDeviceFamily?: string;
   deviceFamily?: string;
+  /**
+   * The patient's own IANA time zone, carried by v13 `display/message`
+   * payloads inside `patientData`. Readings are local wall-clock strings with
+   * no offset, so this is the fallback when the device/server clock delta that
+   * `pump-offset.ts` uses is unavailable — which is the case for that route,
+   * since it does not send `sMedicalDeviceTime` or `currentServerTime`.
+   */
+  clientTimeZoneName?: string;
   medicalDeviceBatteryLevelPercent: number;
   // Newer NGP-tier pumps report this instead of (or alongside)
   // medicalDeviceBatteryLevelPercent (#82). The reference client prefers it
