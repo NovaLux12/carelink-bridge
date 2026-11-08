@@ -39,27 +39,73 @@ export function guessPumpOffset(data: CareLinkData): string {
 }
 
 /**
+ * Largest offset accepted, in hours.
+ *
+ * Real UTC offsets top out at ±14 h (Kiritimati +14, Baker Island −12). xDrip
+ * uses 26 h as its "possibly a different time zone" ceiling and rejects
+ * anything larger as a clock fault rather than a zone. Without a bound, a
+ * single stale or malformed timestamp pair shifts EVERY reading in the payload
+ * by the delta — and unlike a missing timestamp, that produces plausible dates
+ * in the wrong place, which nothing downstream can detect.
+ */
+const MAX_OFFSET_HOURS = 26;
+
+/**
  * Offset between the device's wall clock and the server clock, in ms.
  *
- * Returns `NaN` when either timestamp is absent. That is deliberate and
- * load-bearing: v13 `display/message` payloads carry neither
- * `sMedicalDeviceTime` nor `currentServerTime`, and the previous version
- * subtracted `undefined` from `Date.parse(undefined)`, producing `NaN` which
- * then propagated into every reading's date. `NaN` here is the signal to fall
- * back, not a value to arithmetic on.
+ * Returns `NaN` when either timestamp is absent, OR when the computed delta
+ * exceeds MAX_OFFSET_HOURS. That is deliberate and load-bearing: v13
+ * `display/message` payloads carry neither `sMedicalDeviceTime` nor
+ * `currentServerTime`, and the previous version subtracted `undefined` from
+ * `Date.parse(undefined)`, producing `NaN` which then propagated into every
+ * reading's date. `NaN` here is the signal to fall back, not a value to
+ * arithmetic on.
+ *
+ * The 26 h bound mirrors xDrip's `correctTimeInRecentData` /
+ * `correctTimeInDisplayMessage`, which only apply a correction when
+ * `diffInHour != 0 && diffInHour < 26`. Beyond that the pair is reporting a
+ * clock fault, not a time zone, and trusting it would be worse than the
+ * uncorrected wall-clock string.
  */
 export function guessPumpOffsetMilliseconds(data: CareLinkData): number {
-  if (
-    typeof data.sMedicalDeviceTime !== 'string' ||
-    typeof data.currentServerTime !== 'number'
-  ) {
-    return NaN;
+  const maxOffsetMs = MAX_OFFSET_HOURS * 60 * 60 * 1000;
+
+  /**
+   * Two clock pairs, in preference order.
+   *
+   * `sMedicalDeviceTime`/`currentServerTime` is the legacy pair; xDrip's v13
+   * path does not use it at all. `lastConduitDateTime`/
+   * `lastConduitUpdateServerDateTime` is what `correctTimeInDisplayMessage()`
+   * actually reads, so it is the right evidence for a display/message payload
+   * and is tried first when present.
+   */
+  const pairs: Array<[string | number | undefined, number | undefined, string]> = [
+    [data.lastConduitDateTime, data.lastConduitUpdateServerDateTime, 'conduit'],
+    [data.sMedicalDeviceTime, data.currentServerTime, 'device'],
+  ];
+
+  for (const [deviceTime, serverTime, label] of pairs) {
+    const deviceMs =
+      typeof deviceTime === 'number' ? deviceTime : Date.parse(deviceTime ?? '');
+    if (!Number.isFinite(deviceMs) || typeof serverTime !== 'number' ||
+        !Number.isFinite(serverTime)) {
+      continue;
+    }
+
+    const raw = deviceMs - serverTime;
+    if (Math.abs(raw) > maxOffsetMs) {
+      logger.log(
+        'Ignoring implausible ' + label + ' clock delta of ' +
+          (raw / 3_600_000).toFixed(1) + 'h (limit ' + MAX_OFFSET_HOURS + 'h) — ' +
+          'treating it as a clock fault, not a time zone',
+      );
+      // A fault in the PREFERRED pair should not silently fall through to the
+      // other pair and apply a different correction; report "no usable offset"
+      // so the caller uses the wall-clock string as-is.
+      return NaN;
+    }
+    return Math.round(raw / QUARTER_HOUR_MS) * QUARTER_HOUR_MS;
   }
-  const pumpTimeAsIfUTC = Date.parse(data.sMedicalDeviceTime);
-  const serverTimeUTC = data.currentServerTime;
-  if (!Number.isFinite(pumpTimeAsIfUTC) || !Number.isFinite(serverTimeUTC)) {
-    return NaN;
-  }
-  const raw = pumpTimeAsIfUTC - serverTimeUTC;
-  return Math.round(raw / QUARTER_HOUR_MS) * QUARTER_HOUR_MS;
+
+  return NaN;
 }
