@@ -184,7 +184,12 @@ function sgvEntries(
   const sgvs: NightscoutSGVEntry[] = data.sgs
     .filter(entry => entry.kind === 'SG' && entry.sg !== 0)
     .map(sgv => {
-      const timestamp = parsePumpTime(sgv.datetime, offset, offsetMilliseconds);
+      // Readings from the `display/message` route carry `timestamp` instead of
+      // `datetime`. Both are local-time strings with no zone, so the same
+      // pump-offset correction applies; preferring `timestamp` matches the
+      // reference client. Falling back keeps every older payload identical.
+      const rawTime = sgv.timestamp ?? sgv.datetime ?? '';
+      const timestamp = parsePumpTime(rawTime, offset, offsetMilliseconds);
       return {
         type: 'sgv' as const,
         sgv: normalizeSgToMgdl(sgv.sg, data),

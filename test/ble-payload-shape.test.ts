@@ -92,3 +92,45 @@ describe('deviceIdentitySnapshot (#111)', () => {
     expect(deviceIdentitySnapshot(undefined)).toEqual({});
   });
 });
+
+describe('display/message reading shape (#111)', () => {
+  it('reads the time from `timestamp` when `datetime` is absent', () => {
+    // The display/message route sends timestamp, not datetime. Dropping it
+    // would silently mis-date every reading from that path.
+    const payload = data({
+      sgs: [
+        { sg: 120, timestamp: 'Oct 17, 2015 09:09:00', version: 1, timeChange: false, kind: 'SG' },
+      ],
+    });
+    const result = transform(payload);
+    expect(result.entries).toHaveLength(1);
+    expect(Number.isNaN(result.entries[0].date)).toBe(false);
+    expect(result.entries[0].dateString).not.toBe(
+      new Date(0).toISOString(),
+    );
+  });
+
+  it('prefers `timestamp` over `datetime` when both are present', () => {
+    const payload = data({
+      sgs: [
+        {
+          sg: 120,
+          timestamp: 'Oct 17, 2015 09:09:00',
+          datetime: 'Jan 01, 2000 00:00:00',
+          version: 1,
+          timeChange: false,
+          kind: 'SG',
+        },
+      ],
+    });
+    const result = transform(payload);
+    const viaTimestamp = /2015/.test(result.entries[0].dateString);
+    expect(viaTimestamp).toBe(true);
+  });
+
+  it('still reads `datetime` when `timestamp` is absent (legacy payload)', () => {
+    const result = transform(data());
+    expect(result.entries.length).toBeGreaterThan(0);
+    expect(/2015/.test(result.entries[0].dateString)).toBe(true);
+  });
+});

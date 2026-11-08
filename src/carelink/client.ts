@@ -8,7 +8,9 @@ import { CircuitBreaker, DEFAULT_CIRCUIT_THRESHOLD, DEFAULT_CIRCUIT_COOLDOWN_MS 
 import { isPermanentRefreshFailure } from '../refresh-failure.js';
 import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
-import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
+import { cumulusBaseUrlFrom, fetchDisplayMessage } from './cumulus.js';
+import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
+import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +27,12 @@ export interface CareLinkClientOptions {
   patientId?: string;
   circuitThreshold?: number;
   circuitCooldownMs?: number;
+  /**
+   * Which data route to use. `auto` (default) tries `display/message` then
+   * falls back to the legacy chain; `cumulus` uses only display/message;
+   * `legacy` never calls it. Env: `CARELINK_DATA_PATH`.
+   */
+  dataPath?: string;
 }
 
 export class CareLinkClient {
@@ -213,10 +221,91 @@ export class CareLinkClient {
       );
     }
 
+    // Cumulus first when enabled. `display/message` is the route the current
+    // CareLink Connect app uses and the only one community evidence says
+    // serves Instinct-era sensors; the older paths below are kept as the
+    // fallback so enabling this cannot regress a working Guardian/780G setup.
+    const cumulus = await this.tryDisplayMessage();
+    if (cumulus) return cumulus;
+
     if (role === 'CARE_PARTNER_OUS' || role === 'CARE_PARTNER') {
       return this.fetchAsCarepartner(role);
     }
     return this.fetchAsPatient();
+  }
+
+  /**
+   * `POST {baseUrlCumulus}/display/message`.
+   *
+   * Enabled by `CARELINK_DATA_PATH` (`auto` | `cumulus` | `legacy`, default
+   * `auto`).
+   *
+   *   auto    — try display/message, fall back to the legacy chain on any
+   *             failure. Default: cannot regress a working setup.
+   *   cumulus — use ONLY display/message; a failure surfaces as a failure.
+   *   legacy  — never call it (pre-v0.3 behaviour).
+   *
+   * Returns undefined only in `auto` mode, meaning "fall through".
+   */
+  private async tryDisplayMessage(): Promise<CareLinkData | undefined> {
+    const mode = (this.options.dataPath ?? process.env['CARELINK_DATA_PATH'] ?? 'auto')
+      .trim()
+      .toLowerCase();
+    if (mode === 'legacy') return undefined;
+
+    try {
+      const baseUrlCumulus = await this.resolveCumulusBase();
+      if (!baseUrlCumulus) {
+        throw new Error('discovery document carries no baseUrlCumulus for this region');
+      }
+
+      const data = await fetchDisplayMessage({
+        http: this.axiosInstance,
+        baseUrlCumulus,
+        // The route needs the SAME identity getConnectData() already resolved.
+        getUser: async () => this.currentUser as CareLinkUserInfo,
+        getLinkedPatients: async () => {
+          const resp = await this.axiosInstance.get<CareLinkPatientLink[]>(this.urls.linkedPatients);
+          return Array.isArray(resp.data) ? resp.data : [];
+        },
+        patientId: this.options.patientId,
+      });
+
+      const { family, model } = deviceIdentity(data);
+      logDeviceIdentity('display/message', data, this.isBleDevice(family, model));
+      logger.log('GET data (display/message)');
+      return data;
+    } catch (e) {
+      if (mode === 'cumulus') throw e;
+      // auto: log loudly so a broken Cumulus path is visible in journald,
+      // then let the legacy chain try.
+      logger.warn(
+        'display/message failed, falling back to the legacy data path: ' +
+          (e as Error).message,
+        { component: 'fetch' },
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Regional `baseUrlCumulus`, fetched from the discovery document and cached
+   * for the process lifetime. The document is public and unauthenticated, so
+   * this costs one request per run, not per fetch.
+   */
+  private cumulusBase: string | undefined | null = null;
+
+  private async resolveCumulusBase(): Promise<string | undefined> {
+    if (this.cumulusBase !== null) return this.cumulusBase;
+
+    const isUS = this.serverName.endsWith('.com');
+    const url = buildDiscoveryUrl(isUS);
+    const resp = await this.axiosInstance.get<DiscoverResponse>(url);
+    this.cumulusBase = cumulusBaseUrlFrom(resp.data, isUS ? 'us' : 'eu');
+    if (this.cumulusBase) {
+      logger.log('Cumulus base URL:', this.cumulusBase);
+    }
+    return this.cumulusBase;
   }
 
   private async fetchAsCarepartner(_role: string): Promise<CareLinkData> {
