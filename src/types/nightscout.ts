@@ -35,6 +35,28 @@ export interface NightscoutDeviceStatus {
   uploader: {
     battery: number;
   };
+  /**
+   * CareLink alarm annotation, emitted as `devicestatus.last_alarm`.
+   *
+   * SCOPE — verified 2026-11-08 against `nightscout/cgm-remote-monitor` @
+   * c6a0d8e: **nothing in the Nightscout server or its plugins reads
+   * `last_alarm`**. `grep -rn last_alarm` over the repo (excluding
+   * node_modules) returns **0 hits**. The plugins read `uploader.battery`
+   * (upbat.js:31,70-72), `pump.pump.{clock,reservoir,battery.percent,status}`
+   * (pump.js:302-330), `loop.lastOkMoment` (loop.js) and `xdripjs.*`
+   * (xdripjs.js:31+). Alarms surface in Nightscout via the SGV/errorcodes path
+   * (lib/plugins/errorcodes.js:36-52), not via devicestatus.
+   *
+   * So this field is PERSISTED AND VISIBLE IN THE RAW API, but it drives no
+   * Nightscout UI element or alarm. It is not useless — it makes a pump alarm
+   * retrievable from `devicestatus` for any consumer that looks, and the bridge
+   * also logs alarms itself — but do not assume a CareLink alarm will produce a
+   * Nightscout alarm or a phone notification on its own.
+   *
+   * CAVEAT: `static/js/client.js` in the repo is a ~255-byte stub, so the real
+   * client bundle could not be inspected. A UI reader there cannot be ruled
+   * out, only the server and plugin paths can.
+   */
   last_alarm?: NightscoutLastAlarmAnnotation;
   pump?: {
     battery: { percent: number };
