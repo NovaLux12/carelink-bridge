@@ -110,13 +110,17 @@ describe('display/message reading shape (#111)', () => {
     );
   });
 
-  it('prefers `timestamp` over `datetime` when both are present', () => {
+  it('prefers `datetime` over `timestamp` when both are present', () => {
+    // xDrip SensorGlucose.getDate() (SensorGlucose.java:31-36) returns
+    // datetimeAsDate when non-null and only falls back to timestamp. An earlier
+    // version of this bridge had the precedence backwards and claimed it
+    // "matched the reference client" — it did not.
     const payload = data({
       sgs: [
         {
           sg: 120,
-          timestamp: 'Oct 17, 2015 09:09:00',
-          datetime: 'Jan 01, 2000 00:00:00',
+          timestamp: 'Jan 01, 2000 00:00:00',
+          datetime: 'Oct 17, 2015 09:09:00',
           version: 1,
           timeChange: false,
           kind: 'SG',
@@ -124,8 +128,7 @@ describe('display/message reading shape (#111)', () => {
       ],
     });
     const result = transform(payload);
-    const viaTimestamp = /2015/.test(result.entries[0].dateString);
-    expect(viaTimestamp).toBe(true);
+    expect(/2015/.test(result.entries[0].dateString)).toBe(true);
   });
 
   it('still reads `datetime` when `timestamp` is absent (legacy payload)', () => {
