@@ -221,3 +221,34 @@ describe('appVersion floor (the gate most likely to bite)', () => {
     }
   });
 });
+
+describe('deterministic sgs ordering', () => {
+  // The transform applies the trend arrow to the LAST element and slices the
+  // tail for upload, and Nightscout treats the newest entry as authoritative.
+  // If equal timestamps leave the order arbitrary, the same payload can
+  // produce different "latest" values between runs — unacceptable for a
+  // medical feed. Tie-break by sg so ordering is total.
+  it('breaks equal-timestamp ties deterministically by value', () => {
+    const sgs = [
+      { sg: 200, timestamp: '2025-10-20T11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 100, timestamp: '2025-10-20T11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 150, timestamp: '2025-10-20T09:55:00', version: 1, timeChange: false, kind: 'SG' as const },
+    ];
+    const a = unwrapDisplayMessage(flatPayload({ sgs }), 200);
+    const b = unwrapDisplayMessage(flatPayload({ sgs: [...sgs].reverse() }), 200);
+    expect(a.sgs.map((s) => s.sg)).toEqual([150, 100, 200]);
+    // Same multiset in either input order must yield the same output order.
+    expect(b.sgs.map((s) => s.sg)).toEqual([150, 100, 200]);
+    expect(a.sgs[a.sgs.length - 1].sg).toBe(b.sgs[b.sgs.length - 1].sg);
+  });
+
+  it('is stable across repeated calls on the same payload', () => {
+    const sgs = [
+      { sg: 111, timestamp: '2025-10-20T11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 222, timestamp: '2025-10-20T11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+    ];
+    const first = unwrapDisplayMessage(flatPayload({ sgs }), 200).sgs.map((s) => s.sg);
+    const second = unwrapDisplayMessage(flatPayload({ sgs }), 200).sgs.map((s) => s.sg);
+    expect(second).toEqual(first);
+  });
+});

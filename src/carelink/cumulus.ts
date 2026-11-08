@@ -149,7 +149,23 @@ export function unwrapDisplayMessage(
   const data = (envelope.patientData ?? envelope) as unknown as CareLinkData;
 
   if (Array.isArray(data.sgs)) {
-    data.sgs = [...data.sgs].sort((a, b) => readingTime(a) - readingTime(b));
+    // Sort ascending by time. This is load-bearing: transform() applies the
+    // trend arrow to the LAST element and takes `.slice(-limit)` from the tail,
+    // and Nightscout treats the newest entry as authoritative.
+    //
+    // Ties are broken by value, deliberately. Two readings can share a
+    // timestamp on this route (observed shape, and `sg` is not unique per
+    // stamp), and `Array.prototype.sort` is only stable as of ES2019 — the
+    // ORDER OF EQUAL ELEMENTS is otherwise implementation-defined. Without a
+    // tie-break the last element is arbitrary, so the trend arrow and the
+    // "latest" value can land on a different reading between two runs of the
+    // same payload. A deterministic order makes the same input always produce
+    // the same output, which is the minimum bar for a medical feed.
+    data.sgs = [...data.sgs].sort((a, b) => {
+      const dt = readingTime(a) - readingTime(b);
+      if (dt !== 0) return dt;
+      return a.sg - b.sg;
+    });
   }
   return data;
 }
