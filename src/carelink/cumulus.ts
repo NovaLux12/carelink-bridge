@@ -44,12 +44,24 @@ import type {
 /**
  * App version declared to the server.
  *
- * `3.8` is the highest the discovery axis maps to cumulus v13 (3.9+ falls to a
- * legacy v2 config with no Auth0). CarlosJPV uses `'3.8'`; xDrip sends
- * `'3.8.0'` in the same position. Both are reported working, so the exact
- * minor form is not load-bearing — the field's PRESENCE is.
+ * Two version fields, two different constraints — do not conflate them:
+ *
+ *   - discovery PATH segment (`/discover/android/{X}`): `3.6`–`3.8` → cumulus
+ *     v13; `3.9`+ → legacy v2 config with NO Auth0. Bumping this to "be
+ *     current" silently downgrades the API. Pinned separately in discovery.ts.
+ *   - request BODY `appVersion`: must be **>= 3.7**; no upper bound. `3.6.9`
+ *     and below return `206 {"message":"Upgrade application"}` and no data.
+ *
+ * xDrip sends `3.8.0`; CarlosJPV sends `3.8`. Both are reported working, so
+ * the minor form is not load-bearing — the field's PRESENCE and its floor are.
+ * Overridable because this is a server-side gate that can move without notice.
  */
-const APP_VERSION = '3.8';
+const DEFAULT_APP_VERSION = '3.8.0';
+
+function appVersion(): string {
+  const configured = process.env['CARELINK_APP_VERSION']?.trim();
+  return configured || DEFAULT_APP_VERSION;
+}
 
 /** Android UA the CareLink API expects. Copied from the reference client. */
 const ANDROID_UA =
@@ -187,7 +199,7 @@ export async function fetchDisplayMessage(
   const body: Record<string, string> = {
     username,
     role,
-    appVersion: APP_VERSION,
+    appVersion: appVersion(),
     os: 'android',
   };
   if (patientId) body.patientId = patientId;

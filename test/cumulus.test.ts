@@ -130,7 +130,7 @@ describe('fetchDisplayMessage', () => {
     expect(body).toMatchObject({
       username: 'jlee',
       role: 'PATIENT',
-      appVersion: '3.8',
+      appVersion: '3.8.0',
       os: 'android',
     });
   });
@@ -171,5 +171,53 @@ describe('fetchDisplayMessage', () => {
       }),
     ).rejects.toThrow(/no username/);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe('appVersion floor (the gate most likely to bite)', () => {
+  // Measured against a live account by the reference implementation:
+  // <= 3.6.9 -> 206 {"message":"Upgrade application"} and NO data;
+  // >= 3.7.0 -> 200 + data. The body field is not a header.
+  const FLOOR = '3.7.0';
+
+  function cmp(a: string, b: string): number {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  }
+
+  it('the default appVersion is at or above the documented floor', async () => {
+    const post = vi.fn().mockResolvedValue({
+      status: 200,
+      data: flatPayload(),
+    });
+    await fetchDisplayMessage({
+      http: { post } as unknown as AxiosInstance,
+      baseUrlCumulus: 'https://x/v13',
+      getUser: async () => ({ username: 'u', role: 'PATIENT' }) as never,
+    });
+    const sent = (post.mock.calls[0][1] as Record<string, string>).appVersion;
+    expect(cmp(sent, FLOOR)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('honours CARELINK_APP_VERSION when set', async () => {
+    const original = process.env['CARELINK_APP_VERSION'];
+    process.env['CARELINK_APP_VERSION'] = '3.9.1';
+    try {
+      const post = vi.fn().mockResolvedValue({ status: 200, data: flatPayload() });
+      await fetchDisplayMessage({
+        http: { post } as unknown as AxiosInstance,
+        baseUrlCumulus: 'https://x/v13',
+        getUser: async () => ({ username: 'u', role: 'PATIENT' }) as never,
+      });
+      expect((post.mock.calls[0][1] as Record<string, string>).appVersion).toBe('3.9.1');
+    } finally {
+      if (original === undefined) delete process.env['CARELINK_APP_VERSION'];
+      else process.env['CARELINK_APP_VERSION'] = original;
+    }
   });
 });

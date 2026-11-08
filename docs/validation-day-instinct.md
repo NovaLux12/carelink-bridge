@@ -99,37 +99,54 @@ endpoint is its own silent failure. Instead:
    - add the model prefix to `BLE_DEVICE_MODELS`, or
    - accept that Instinct needs a different data path entirely (see below).
 
-## The Instinct data-path question
+## The Instinct data-path question — corrected 2026-11-08
 
-**UNVERIFIED, and it is the one that could invalidate the whole exercise.**
-Community reports (xDrip discussion #4318) say Instinct uses a "Cumulus"-style
-API that no third-party client implements: login succeeds, data download fails.
+⚠ **An earlier version of this document said Instinct "uses a Cumulus API that no
+third-party client implements". That was wrong, and the correction matters.**
+Full evidence: [`instinct-data-path-brief.md`](./instinct-data-path-brief.md).
 
-What is true today:
+What is actually true:
 
-- The bridge speaks the **cumulus v13** track (`discovery.ts` pins `android/3.6`).
-- `baseUrlCumulus` from the discovery document is parsed **only** for a
-  fail-closed login check (issue #75). It is never used to build a data URL.
-- There is **no** PDE or cumulus-v2 transport in `src/` at all.
-- The bridge's data paths are `monitor/data`, `blePereodicDataEndpoint`, and
-  `connect/data?msgType=last24hours`. All three are the v13 track.
+- **"Cumulus" is not a new API.** It is the literal key name `baseUrlCumulus` in
+  Medtronic's public discovery JSON, and it has carried v11 and now **v13** — the
+  same versioned base Guardian-era clients already use. There is no separate
+  Instinct transport in that config.
+- **A third-party client does implement it, and has since 2026-01-30.** xDrip+
+  PR #4330 ("upgrade to v13 api — Support for Instinct sensors") merged with the
+  Instinct box ticked, and multiple users confirmed data.
+- **What broke Instinct later was a client-version gate, not a new API.** In Aug
+  2026 `POST {baseUrlCumulus}/display/message` started rejecting
+  `appVersion: "3.6.0"` with `206 {"message":"Upgrade application"}`. Bumping the
+  body field restored data; xDrip shipped that as PR #4711 (2026-08-29).
 
-If Step 2/3 shows `BLE match: yes` and glucose flows, none of this matters and
-Instinct rides the existing path. If glucose does **not** flow while login
-succeeds, the Cumulus hypothesis is live and the work becomes:
+So the work is not "implement a new transport". It is: be on `baseUrlCumulus`
+v13 `display/message`, and send a **body** `appVersion` ≥ 3.7. Both are now
+implemented (`src/carelink/cumulus.ts`, `CARELINK_DATA_PATH`).
 
-1. Determine the base URL for the device's data plane (the discovery document
-   advertises it; confirm which cell).
-2. Probe the token: does the `carepartner.patient.{ous,us}` audience carry to
-   that plane?
-3. Write a transport — `src/carelink/` has no pluggable base-URL seam today, so
-   this is a real piece of work, not a config change.
-4. Write a second transform. `src/transform/index.ts` reads
-   `medicalDeviceFamily`, `bgUnits`/`bgunits`, `pumpTime`, `sgs[]`, and
-   `lastSGTrend`; an Instinct payload is unverified and will probably differ.
+The residual risks that remain genuine:
 
-Budget a day if it rides the existing path. Budget a research project if it
-does not.
+1. **The wire family value is unverified.** Three different fields carry a family
+   and the bridge has historically treated them as one:
+   `deviceFamily` (`/patient/monitor/data` — zero public captures),
+   `medicalDeviceFamily` inside `patientData` (reportedly `CC` for Instinct, one
+   hedged secondhand source), and `lastDeviceFamily`
+   (`/patient/m2m/links/patients` — reportedly `INSTINCT`). `CC` is not one of
+   the 16 published family tokens. **Do not widen the matcher on this** — the
+   identity log is what settles it.
+2. **Legacy backends answer 200 with stale records.** Accepting the first 200
+   ends the search before reaching the right backend, which is why
+   `buildEndpointCandidates()` now leads with v13 regardless of what the config
+   hands out. A freshness check on the result is still worth doing by hand.
+3. **`blePereodicDataEndpoint` is a v6 URL in every country probed** (GB/US/NL/
+   DE/IE/AU/CA, 2026-11-08) while the device is v13-era. Treat it as a fallback,
+   never the default.
+4. **Diagnostic probes must be read-only on the token.** Auth0 rotates refresh
+   tokens and reuse detection revokes the whole family: probing locally while the
+   deployed bridge refreshes from the same `logindata.json` kills the deployment.
+5. **The 780G + Instinct payload shape is unconfirmed.** Every detailed published
+   Instinct capture is from **MiniMed Go** (MDI/InPen), not the 780G. Behavioural
+   reports say 780G works; no pasted payload exists. Do not assume the two are
+   identical.
 
 ## Known-fragile spots, in order of what will bite first
 
