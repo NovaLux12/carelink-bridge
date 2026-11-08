@@ -88,6 +88,20 @@ export interface CareLinkData {
   finalCalibration?: boolean;
   /** Pump suspension flag (RecentData.java:120). Not surfaced downstream. */
   medicalDeviceSuspended?: boolean;
+  /**
+   * Newer-block conduit clock pair (RecentData.java:80 and :143).
+   *
+   * xDrip's v13 path (`correctTimeInDisplayMessage`) derives its correction
+   * from THESE, not from `sMedicalDeviceTime`/`currentServerTime`:
+   *
+   *   diffInHour = round((lastConduitUpdateServerDateTime - lastConduitDateTime) / 3600000)
+   *
+   * So on a display/message payload the conduit pair is the clock evidence the
+   * reference implementation trusts. Declared here so the offset can fall back
+   * to it when the legacy pair is absent, which is the expected v13 shape.
+   */
+  lastConduitDateTime?: string | number;
+  lastConduitUpdateServerDateTime?: number;
   medicalDeviceBatteryLevelPercent: number;
   // Newer NGP-tier pumps report this instead of (or alongside)
   // medicalDeviceBatteryLevelPercent (#82). The reference client prefers it
