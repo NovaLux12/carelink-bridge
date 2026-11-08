@@ -31,16 +31,16 @@
     "diabetes"
   ],
   "dependencies": {
-    "axios": "^1.20.0",
-    "dotenv": "^18.0.8",
-    "qs": "^6.16.1",
-    "puppeteer-core": "^25.14.0"
+    "axios": "^1.21.0",
+    "dotenv": "^18.0.9",
+    "qs": "^6.17.1",
+    "puppeteer-core": "^25.16.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/qs": "^6.9.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   }
 }
