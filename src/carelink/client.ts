@@ -266,7 +266,20 @@ export class CareLinkClient {
         getUser: async () => this.currentUser as CareLinkUserInfo,
         getLinkedPatients: async () => {
           const resp = await this.axiosInstance.get<CareLinkPatientLink[]>(this.urls.linkedPatients);
-          return Array.isArray(resp.data) ? resp.data : [];
+          const patients = Array.isArray(resp.data) ? resp.data : [];
+          // The patient list carries `lastDeviceFamily`, which is reported to
+          // be the family that actually says "INSTINCT" (while display/message
+          // says "CC"). Log it: it is the cheapest real signal about which
+          // device the account is bound to, and it is the field the bridge has
+          // never read.
+          for (const patient of patients) {
+            logDeviceIdentity(
+              'links/patients',
+              patient as unknown as CareLinkData,
+              false,
+            );
+          }
+          return patients;
         },
         patientId: this.options.patientId,
       });
@@ -659,6 +672,12 @@ function deviceIdentity(
 const DEVICE_IDENTITY_KEYS = [
   'deviceFamily',
   'medicalDeviceFamily',
+  // Third, distinct family field: `GET /patient/m2m/links/patients` returns
+  // `lastDeviceFamily`, and for an Instinct-era device it is reported to carry
+  // "INSTINCT" while `display/message` carries "CC" in the same session. The
+  // bridge treats all three as one family today, which is the trap: they are
+  // three fields with three values, from three endpoints.
+  'lastDeviceFamily',
   'deviceModel',
   'sensorModel',
   'medicalDeviceModel',
@@ -893,19 +912,27 @@ export function isBleDevice(deviceFamily?: string, deviceModel?: string): boolea
 }
 
 /**
- * Known API versions of the carepartner data endpoint, tried newest-first
- * after whatever version the country-settings config hands out. As of
- * 2026-07 the config returns v6 while the app discovery config advertises
- * a v13 base URL, so the fallback list spans both directions. Exported at
- * module level for unit testing.
+ * API versions of the carepartner data endpoint, newest-first.
+ *
+ * Ordering is load-bearing, not cosmetic. `blePereodicDataEndpoint` from
+ * `/patient/countries/settings` returns **v6** for every country probed
+ * (GB/US/NL/DE/IE/AU/CA, 2026-11-08) — two generations behind the v13 the
+ * discovery document advertises — while xDrip+ ignores that field entirely and
+ * hardcodes v13 ("use new v13 endpoint in every region"). A legacy backend
+ * answers 200 with **the last records it ever held**, so trying the
+ * config-supplied URL first means a stale-but-successful response wins the
+ * loop and the correct backend is never reached. That is why v13 leads and the
+ * config's own version is tried later rather than first.
+ *
+ * v5 is dropped: `/connect/carepartner/v5/display/message` has no route at all
+ * (not auth-gated), so it can only ever cost a request. Exported for tests.
  */
-const BLE_API_VERSIONS = [13, 11, 6, 5];
+const BLE_API_VERSIONS = [13, 11, 6] as const;
 
 export function buildEndpointCandidates(url: string): string[] {
   if (!/\/v\d+\//.test(url)) return [url];
-  const candidates = [
-    url,
-    ...BLE_API_VERSIONS.map(v => url.replace(/\/v\d+\//, `/v${v}/`)),
-  ];
+  // Newest-first regardless of which version the config handed us; a config
+  // URL that is already one of these ends up first by construction.
+  const candidates = BLE_API_VERSIONS.map(v => url.replace(/\/v\d+\//, `/v${v}/`));
   return [...new Set(candidates)];
 }
