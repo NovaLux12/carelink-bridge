@@ -48,8 +48,12 @@ export interface NightscoutDeviceStatus {
   connect: {
     sensorState: string;
     calibStatus: string;
-    sensorDurationHours: number;
-    timeToNextCalibHours: number;
+    // Optional: the wire carries either `*Hours` (legacy) or `*Minutes`
+    // (v13 display/message), and a payload can legitimately carry neither.
+    // Declaring these required is what let a missing value write `undefined`
+    // into a medical field with no type error.
+    sensorDurationHours?: number;
+    timeToNextCalibHours?: number;
     conduitInRange: boolean;
     conduitMedicalDeviceInRange: boolean;
     conduitSensorInRange: boolean;

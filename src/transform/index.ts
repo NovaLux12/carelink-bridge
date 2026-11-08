@@ -156,6 +156,31 @@ function deviceBatteryPercent(data: CareLinkData): number {
   return data.pumpBatteryLevelPercent || data.medicalDeviceBatteryLevelPercent;
 }
 
+/**
+ * Sensor age / time-to-calibration in HOURS.
+ *
+ * The wire has two spellings depending on payload generation (xDrip
+ * RecentData.java:112-113 legacy `*Hours`; :146-147 newer `*Minutes`, in the
+ * same block as `clientTimeZoneName`). A v13 display/message payload sends the
+ * minutes pair, so reading only `*Hours` yields `undefined` for sensor age on
+ * exactly the device this bridge is being prepared for.
+ *
+ * Nightscout's `connect` block is documented in hours (and every value this
+ * bridge has ever written there was hours), so minutes are converted rather
+ * than passed through — passing 10080 for a 7-day sensor would be a
+ * 60x lie in a medical field.
+ */
+function sensorHours(
+  hours: number | undefined,
+  minutes: number | undefined,
+): number | undefined {
+  if (typeof hours === 'number' && Number.isFinite(hours)) return hours;
+  if (typeof minutes === 'number' && Number.isFinite(minutes)) {
+    return minutes / 60;
+  }
+  return undefined;
+}
+
 function deviceStatusEntry(
   data: CareLinkData,
   offset: string,
@@ -196,8 +221,8 @@ function deviceStatusEntry(
       connect: {
         sensorState: data.sensorState,
         calibStatus: data.calibStatus,
-        sensorDurationHours: data.sensorDurationHours,
-        timeToNextCalibHours: data.timeToNextCalibHours,
+        sensorDurationHours: sensorHours(data.sensorDurationHours, data.sensorDurationMinutes),
+        timeToNextCalibHours: sensorHours(data.timeToNextCalibHours, data.timeToNextCalibrationMinutes),
         conduitInRange: data.conduitInRange,
         conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
         conduitSensorInRange: data.conduitSensorInRange,
@@ -242,8 +267,8 @@ function deviceStatusEntry(
     connect: {
       sensorState: data.sensorState,
       calibStatus: data.calibStatus,
-      sensorDurationHours: data.sensorDurationHours,
-      timeToNextCalibHours: data.timeToNextCalibHours,
+      sensorDurationHours: sensorHours(data.sensorDurationHours, data.sensorDurationMinutes),
+      timeToNextCalibHours: sensorHours(data.timeToNextCalibHours, data.timeToNextCalibrationMinutes),
       conduitInRange: data.conduitInRange,
       conduitMedicalDeviceInRange: data.conduitMedicalDeviceInRange,
       conduitSensorInRange: data.conduitSensorInRange,
