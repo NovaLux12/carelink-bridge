@@ -228,11 +228,32 @@ export class CareLinkClient {
     const cumulus = await this.tryDisplayMessage();
     if (cumulus) return cumulus;
 
-    if (role === 'CARE_PARTNER_OUS' || role === 'CARE_PARTNER') {
-      return this.fetchAsCarepartner(role);
+    try {
+      if (role === 'CARE_PARTNER_OUS' || role === 'CARE_PARTNER') {
+        return await this.fetchAsCarepartner(role);
+      }
+      return await this.fetchAsPatient();
+    } catch (legacyError) {
+      // In `auto` both routes have now failed. Reporting only the legacy error
+      // hides the Cumulus reason — which is exactly the diagnostic an operator
+      // needs on validation day, because display/message failing is the new
+      // and interesting fact.
+      //
+      // Do NOT wrap it in a new Error: the retry policy and circuit breaker
+      // key off `error.response.status` (401/403/429 decide the retry), and a
+      // plain wrapper silently strips that. Annotate the SAME object instead.
+      if (this.lastCumulusError && legacyError instanceof Error) {
+        legacyError.message +=
+          '\n  (display/message also failed first: ' +
+          (this.lastCumulusError as Error).message +
+          ')\n  Set CARELINK_DATA_PATH=cumulus to surface that route alone.';
+      }
+      throw legacyError;
     }
-    return this.fetchAsPatient();
   }
+
+  /** Why the last display/message attempt failed, if it did. */
+  private lastCumulusError: unknown = undefined;
 
   /**
    * `POST {baseUrlCumulus}/display/message`.
@@ -291,7 +312,9 @@ export class CareLinkClient {
     } catch (e) {
       if (mode === 'cumulus') throw e;
       // auto: log loudly so a broken Cumulus path is visible in journald,
-      // then let the legacy chain try.
+      // then let the legacy chain try. Retain the reason so getConnectData()
+      // can report BOTH routes if the fallback fails too.
+      this.lastCumulusError = e;
       logger.warn(
         'display/message failed, falling back to the legacy data path: ' +
           (e as Error).message,
