@@ -70,13 +70,20 @@ export interface CareLinkData {
    */
   clientTimeZoneName?: string;
   /**
-   * Newer-payload duration fields (xDrip RecentData.java:146-147, the same
-   * block as `clientTimeZoneName`, i.e. the v13 shape). The legacy spellings
-   * above are `*Hours`; on a v13 payload those keys are ABSENT and only the
-   * `*Minutes` pair is sent. Reading only the hours fields would write
-   * `undefined` for sensor age on the very device this bridge is being
-   * prepared for, so both are declared and the transform prefers whichever is
-   * present.
+   * Duration fields, minutes spellings (xDrip RecentData.java:146-147).
+   *
+   * CORRECTION to an earlier comment here: `RecentData.java` has **no legacy
+   * block**. The generation marker at :79 precedes every instance field, so
+   * BOTH `sensorDurationHours` (:112-113) and `sensorDurationMinutes`
+   * (:146-147) are in the same, newer declaration block. The split is not
+   * "old file vs new file" — it is which of two spellings Medtronic actually
+   * sends on a given payload, and `clientTimeZoneName` (:148) is the marker
+   * that a payload is the newer display/message shape.
+   *
+   * Both are declared and the transform prefers whichever is present, because
+   * a v13 payload has been reported to send the MINUTES pair while the older
+   * responses send HOURS. Reading only one would silently write `undefined` for
+   * sensor age.
    */
   sensorDurationMinutes?: number;
   timeToNextCalibrationMinutes?: number;
@@ -89,16 +96,17 @@ export interface CareLinkData {
   /** Pump suspension flag (RecentData.java:120). Not surfaced downstream. */
   medicalDeviceSuspended?: boolean;
   /**
-   * Newer-block conduit clock pair (RecentData.java:80 and :143).
+   * The conduit clock pair (RecentData.java:80 `lastConduitUpdateServerDateTime`
+   * and :143 `lastConduitDateTime`).
    *
    * xDrip's v13 path (`correctTimeInDisplayMessage`) derives its correction
    * from THESE, not from `sMedicalDeviceTime`/`currentServerTime`:
    *
    *   diffInHour = round((lastConduitUpdateServerDateTime - lastConduitDateTime) / 3600000)
    *
-   * So on a display/message payload the conduit pair is the clock evidence the
-   * reference implementation trusts. Declared here so the offset can fall back
-   * to it when the legacy pair is absent, which is the expected v13 shape.
+   * Note `lastConduitDateTime` carries a custom deserializer
+   * (`@JsonAdapter(CareLinkJsonAdapter.class)`) — one of only two annotated
+   * fields in the whole contract — so its wire form is not a plain ISO string.
    */
   lastConduitDateTime?: string | number;
   lastConduitUpdateServerDateTime?: number;
