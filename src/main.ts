@@ -188,10 +188,22 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
     return;
   }
   try {
-    await upload(items, endpoint, config.nsSecret);
+    const stored = await upload(items, endpoint, config.nsSecret);
     const kind = endpoint.includes('entries') ? 'entries' as const : 'devicestatus' as const;
-    metrics.incUpload(kind, items.length);
-    logger.info('Upload succeeded', { endpoint, count: items.length });
+    metrics.incUpload(kind, stored);
+    // Report what was STORED, not what was sent. Nightscout dedups entries on
+    // (sysTime, type) by upsert, so a re-post silently updates an existing row
+    // and the stored count can legitimately be lower than the sent count. Any
+    // gap is worth seeing rather than assuming.
+    if (stored !== items.length) {
+      logger.info(
+        'Upload stored ' + stored + ' of ' + items.length + ' item(s) — the rest ' +
+          'were duplicates or discarded',
+        { endpoint, sent: items.length, stored },
+      );
+    } else {
+      logger.info('Upload succeeded', { endpoint, count: stored });
+    }
   } catch (err) {
     // Continue even if Nightscout can't be reached
     logger.error('Upload failed', { endpoint, error: (err as Error).message });
