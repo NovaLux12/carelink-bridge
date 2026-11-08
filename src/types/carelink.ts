@@ -69,6 +69,25 @@ export interface CareLinkData {
    * since it does not send `sMedicalDeviceTime` or `currentServerTime`.
    */
   clientTimeZoneName?: string;
+  /**
+   * Newer-payload duration fields (xDrip RecentData.java:146-147, the same
+   * block as `clientTimeZoneName`, i.e. the v13 shape). The legacy spellings
+   * above are `*Hours`; on a v13 payload those keys are ABSENT and only the
+   * `*Minutes` pair is sent. Reading only the hours fields would write
+   * `undefined` for sensor age on the very device this bridge is being
+   * prepared for, so both are declared and the transform prefers whichever is
+   * present.
+   */
+  sensorDurationMinutes?: number;
+  timeToNextCalibrationMinutes?: number;
+  /** Newer-payload sensor/loop flags. Not yet surfaced downstream. */
+  gstCommunicationState?: boolean;
+  gstBatteryLevel?: number;
+  averageSGFloat?: number;
+  calFreeSensor?: boolean;
+  finalCalibration?: boolean;
+  /** Pump suspension flag (RecentData.java:120). Not surfaced downstream. */
+  medicalDeviceSuspended?: boolean;
   medicalDeviceBatteryLevelPercent: number;
   // Newer NGP-tier pumps report this instead of (or alongside)
   // medicalDeviceBatteryLevelPercent (#82). The reference client prefers it
