@@ -1,6 +1,11 @@
 export interface CareLinkSG {
   sg: number;
-  datetime: string;
+  /**
+   * Legacy reading time. Optional because the `display/message` route sends
+   * `timestamp` instead — a reading carries one or the other, not both. The
+   * transform prefers `timestamp` and falls back here.
+   */
+  datetime?: string;
   version: number;
   timeChange: boolean;
   kind: 'SG';
@@ -11,6 +16,14 @@ export interface CareLinkSG {
   // semantics — see src/transform/pump-offset.ts).
   sensorState?: string;
   relativeOffset?: number;
+  /**
+   * Newer payloads (`POST {baseUrlCumulus}/display/message`, the route
+   * Instinct-era devices use) carry the reading time as `timestamp` instead
+   * of `datetime`, and it is a local-time string with no zone. `datetime`
+   * stays the older field; a reading may carry either, so both are optional
+   * at the type level even though every payload seen so far has one.
+   */
+  timestamp?: string;
 }
 
 export interface CareLinkActiveInsulin {

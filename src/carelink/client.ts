@@ -8,7 +8,9 @@ import { CircuitBreaker, DEFAULT_CIRCUIT_THRESHOLD, DEFAULT_CIRCUIT_COOLDOWN_MS 
 import { isPermanentRefreshFailure } from '../refresh-failure.js';
 import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
-import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings } from '../types/carelink.js';
+import { cumulusBaseUrlFrom, fetchDisplayMessage } from './cumulus.js';
+import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
+import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +27,12 @@ export interface CareLinkClientOptions {
   patientId?: string;
   circuitThreshold?: number;
   circuitCooldownMs?: number;
+  /**
+   * Which data route to use. `auto` (default) tries `display/message` then
+   * falls back to the legacy chain; `cumulus` uses only display/message;
+   * `legacy` never calls it. Env: `CARELINK_DATA_PATH`.
+   */
+  dataPath?: string;
 }
 
 export class CareLinkClient {
@@ -213,10 +221,91 @@ export class CareLinkClient {
       );
     }
 
+    // Cumulus first when enabled. `display/message` is the route the current
+    // CareLink Connect app uses and the only one community evidence says
+    // serves Instinct-era sensors; the older paths below are kept as the
+    // fallback so enabling this cannot regress a working Guardian/780G setup.
+    const cumulus = await this.tryDisplayMessage();
+    if (cumulus) return cumulus;
+
     if (role === 'CARE_PARTNER_OUS' || role === 'CARE_PARTNER') {
       return this.fetchAsCarepartner(role);
     }
     return this.fetchAsPatient();
+  }
+
+  /**
+   * `POST {baseUrlCumulus}/display/message`.
+   *
+   * Enabled by `CARELINK_DATA_PATH` (`auto` | `cumulus` | `legacy`, default
+   * `auto`).
+   *
+   *   auto    — try display/message, fall back to the legacy chain on any
+   *             failure. Default: cannot regress a working setup.
+   *   cumulus — use ONLY display/message; a failure surfaces as a failure.
+   *   legacy  — never call it (pre-v0.3 behaviour).
+   *
+   * Returns undefined only in `auto` mode, meaning "fall through".
+   */
+  private async tryDisplayMessage(): Promise<CareLinkData | undefined> {
+    const mode = (this.options.dataPath ?? process.env['CARELINK_DATA_PATH'] ?? 'auto')
+      .trim()
+      .toLowerCase();
+    if (mode === 'legacy') return undefined;
+
+    try {
+      const baseUrlCumulus = await this.resolveCumulusBase();
+      if (!baseUrlCumulus) {
+        throw new Error('discovery document carries no baseUrlCumulus for this region');
+      }
+
+      const data = await fetchDisplayMessage({
+        http: this.axiosInstance,
+        baseUrlCumulus,
+        // The route needs the SAME identity getConnectData() already resolved.
+        getUser: async () => this.currentUser as CareLinkUserInfo,
+        getLinkedPatients: async () => {
+          const resp = await this.axiosInstance.get<CareLinkPatientLink[]>(this.urls.linkedPatients);
+          return Array.isArray(resp.data) ? resp.data : [];
+        },
+        patientId: this.options.patientId,
+      });
+
+      const { family, model } = deviceIdentity(data);
+      logDeviceIdentity('display/message', data, this.isBleDevice(family, model));
+      logger.log('GET data (display/message)');
+      return data;
+    } catch (e) {
+      if (mode === 'cumulus') throw e;
+      // auto: log loudly so a broken Cumulus path is visible in journald,
+      // then let the legacy chain try.
+      logger.warn(
+        'display/message failed, falling back to the legacy data path: ' +
+          (e as Error).message,
+        { component: 'fetch' },
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Regional `baseUrlCumulus`, fetched from the discovery document and cached
+   * for the process lifetime. The document is public and unauthenticated, so
+   * this costs one request per run, not per fetch.
+   */
+  private cumulusBase: string | undefined | null = null;
+
+  private async resolveCumulusBase(): Promise<string | undefined> {
+    if (this.cumulusBase !== null) return this.cumulusBase;
+
+    const isUS = this.serverName.endsWith('.com');
+    const url = buildDiscoveryUrl(isUS);
+    const resp = await this.axiosInstance.get<DiscoverResponse>(url);
+    this.cumulusBase = cumulusBaseUrlFrom(resp.data, isUS ? 'us' : 'eu');
+    if (this.cumulusBase) {
+      logger.log('Cumulus base URL:', this.cumulusBase);
+    }
+    return this.cumulusBase;
   }
 
   private async fetchAsCarepartner(_role: string): Promise<CareLinkData> {
@@ -236,7 +325,10 @@ export class CareLinkClient {
     try {
       const monitorResp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
       const { family, model } = deviceIdentity(monitorResp.data);
-      if (monitorResp.data && this.isBleDevice(family, model)) {
+      const bleMatch = monitorResp.data ? this.isBleDevice(family, model) : false;
+      logDeviceIdentity('monitor/data (carepartner)', monitorResp.data, bleMatch);
+
+      if (monitorResp.data && bleMatch) {
         logger.log('BLE device detected for carepartner, using BLE endpoint');
         return this.fetchBleDeviceData(patientId, 'carepartner');
       }
@@ -329,8 +421,10 @@ export class CareLinkClient {
     try {
       const resp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
       const { family, model } = deviceIdentity(resp.data);
+      const bleMatch = resp.data ? this.isBleDevice(family, model) : false;
+      logDeviceIdentity('monitor/data (patient)', resp.data, bleMatch);
 
-      if (resp.data && this.isBleDevice(family, model)) {
+      if (resp.data && bleMatch) {
         logger.log('BLE device detected, using BLE endpoint');
         return this.fetchBleDeviceData(this.accountUsername());
       }
@@ -545,6 +639,73 @@ function deviceIdentity(
     family: pick('deviceFamily') ?? pick('medicalDeviceFamily'),
     model: pick('deviceModel') ?? pick('sensorModel'),
   };
+}
+
+/**
+ * Which keys in a CareLink payload carry device identity (#111).
+ *
+ * Validation day needs the answer to "what family string did the cloud
+ * actually send?", and the honest answer today is that nobody knows: the
+ * documented vocabulary (`GUARDIAN` / `NGP` / `CGM` / `CC`) and the spellings
+ * `isBleDevice()` matches (`BLE…`, `SIMPLERA…`) may not overlap at all, and
+ * `CC` reportedly covers Instinct. Rather than widen the matcher on a guess,
+ * log the identity keys that are present — values included, since a device
+ * family name is not a secret — so the widening can be made on evidence.
+ *
+ * Deliberately enumerates a fixed key list instead of dumping the payload:
+ * the response also carries glucose readings and alarm history, which have no
+ * business in a log file.
+ */
+const DEVICE_IDENTITY_KEYS = [
+  'deviceFamily',
+  'medicalDeviceFamily',
+  'deviceModel',
+  'sensorModel',
+  'medicalDeviceModel',
+  'deviceModelMapping',
+  'deviceToFamilyMapping',
+  'deviceSerialNumber',
+] as const;
+
+export function deviceIdentitySnapshot(
+  data: CareLinkData | undefined,
+): Record<string, unknown> {
+  const raw = (data ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of DEVICE_IDENTITY_KEYS) {
+    const value = raw[key];
+    if (value !== undefined && value !== null && value !== '') {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/**
+ * Log the device identity a response carried, at most once per distinct shape.
+ *
+ * The failure this exists to prevent is silent: an unrecognised family means
+ * `isBleDevice()` returns false, the BLE branch is skipped, and the legacy
+ * endpoint answers with an empty or useless body — "Fetch Success" with zero
+ * glucose data, the exact class of bug upstream PR #2 fixed. Journald should
+ * say so out loud (issue #81 step 3).
+ */
+let lastIdentityLogged: string | undefined;
+
+export function logDeviceIdentity(
+  endpoint: string,
+  data: CareLinkData | undefined,
+  bleMatch: boolean,
+): void {
+  const snapshot = deviceIdentitySnapshot(data);
+  const signature = `${endpoint}|${JSON.stringify(snapshot)}|${bleMatch}`;
+  if (signature === lastIdentityLogged) return;
+  lastIdentityLogged = signature;
+
+  logger.log(
+    `Device identity from ${endpoint}: ${JSON.stringify(snapshot)} ` +
+      `(BLE match: ${bleMatch ? 'yes' : 'NO'})`,
+  );
 }
 
 /**

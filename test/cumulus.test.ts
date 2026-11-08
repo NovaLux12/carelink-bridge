@@ -1,0 +1,175 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { AxiosInstance } from 'axios';
+import {
+  cumulusBaseUrlFrom,
+  unwrapDisplayMessage,
+  fetchDisplayMessage,
+  CumulusHttpError,
+} from '../src/carelink/cumulus.js';
+import type { DiscoverResponse, CareLinkData } from '../src/types/carelink.js';
+
+const DISCOVERY: DiscoverResponse = {
+  CP: [
+    { region: 'eu', baseUrlCumulus: 'https://clcloud.minimed.eu/connect/carepartner/v13' },
+    { region: 'us', baseUrlCumulus: 'https://clcloud.minimed.com/connect/carepartner/v13/' },
+  ],
+};
+
+function flatPayload(overrides: Partial<CareLinkData> = {}): CareLinkData {
+  return {
+    sgs: [],
+    lastSG: { sg: 120, datetime: 'Oct 20, 2025 11:00:00', version: 1, timeChange: false, kind: 'SG' },
+    lastSGTrend: 'FLAT',
+    currentServerTime: 1760961600000,
+    sMedicalDeviceTime: 'Oct 20, 2025 11:00:00',
+    lastMedicalDeviceDataUpdateServerTime: 1760961540000,
+    medicalDeviceFamily: 'INSTINCT',
+    medicalDeviceBatteryLevelPercent: 80,
+    conduitBatteryLevel: 80,
+    conduitBatteryStatus: 'FULL',
+    conduitInRange: true,
+    conduitMedicalDeviceInRange: true,
+    conduitSensorInRange: true,
+    sensorState: 'NORMAL',
+    calibStatus: 'LESS_THAN_TWELVE_HRS',
+    sensorDurationHours: 10,
+    timeToNextCalibHours: 0,
+    ...overrides,
+  } as CareLinkData;
+}
+
+describe('cumulusBaseUrlFrom', () => {
+  it('picks the regional entry and trims a trailing slash', () => {
+    expect(cumulusBaseUrlFrom(DISCOVERY, 'us')).toBe(
+      'https://clcloud.minimed.com/connect/carepartner/v13',
+    );
+    expect(cumulusBaseUrlFrom(DISCOVERY, 'eu')).toBe(
+      'https://clcloud.minimed.eu/connect/carepartner/v13',
+    );
+  });
+
+  it('is case-insensitive on the region key', () => {
+    const doc: DiscoverResponse = { CP: [{ region: 'EU', baseUrlCumulus: 'https://x/v13' }] };
+    expect(cumulusBaseUrlFrom(doc, 'eu')).toBe('https://x/v13');
+  });
+
+  it('returns undefined when the region or the field is missing', () => {
+    expect(cumulusBaseUrlFrom({ CP: [] }, 'eu')).toBeUndefined();
+    expect(cumulusBaseUrlFrom({ CP: [{ region: 'eu' }] }, 'eu')).toBeUndefined();
+    expect(cumulusBaseUrlFrom(undefined, 'eu')).toBeUndefined();
+  });
+});
+
+describe('unwrapDisplayMessage', () => {
+  it('unwraps patientData when the newer envelope is used', () => {
+    const inner = flatPayload({ sgs: [] });
+    const result = unwrapDisplayMessage({ patientData: inner, metadata: { version: 13 } }, 200);
+    expect(result.medicalDeviceFamily).toBe('INSTINCT');
+  });
+
+  it('accepts the flat RecentData shape unchanged', () => {
+    const flat = flatPayload();
+    const result = unwrapDisplayMessage(flat, 200);
+    expect(result.medicalDeviceFamily).toBe('INSTINCT');
+  });
+
+  it('sorts sgs ascending by time (the wire order is not chronological)', () => {
+    const sgs = [
+      { sg: 130, datetime: 'Oct 20, 2025 11:10:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 110, datetime: 'Oct 20, 2025 11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 120, datetime: 'Oct 20, 2025 11:05:00', version: 1, timeChange: false, kind: 'SG' as const },
+    ];
+    const result = unwrapDisplayMessage(flatPayload({ sgs }), 200);
+    expect(result.sgs.map((s) => s.sg)).toEqual([110, 120, 130]);
+  });
+
+  it('sorts on `timestamp` when the newer reading shape is used', () => {
+    const sgs = [
+      { sg: 130, timestamp: '2025-10-20T11:10:00', version: 1, timeChange: false, kind: 'SG' as const },
+      { sg: 110, timestamp: '2025-10-20T11:00:00', version: 1, timeChange: false, kind: 'SG' as const },
+    ];
+    const result = unwrapDisplayMessage(flatPayload({ sgs }), 200);
+    expect(result.sgs.map((s) => s.sg)).toEqual([110, 130]);
+  });
+
+  it('explains HTTP 204 as wrong role / patientId rather than "no data"', () => {
+    expect(() => unwrapDisplayMessage(undefined, 204)).toThrow(CumulusHttpError);
+    expect(() => unwrapDisplayMessage(undefined, 204)).toThrow(/204.*wrong role/i);
+  });
+
+  it('explains the 206 "Upgrade application" rejection', () => {
+    // This is the exact body the reference client records for a missing
+    // appVersion/os in the request body.
+    expect(() => unwrapDisplayMessage({ message: 'Upgrade application' }, 206)).toThrow(
+      /Upgrade application/,
+    );
+  });
+
+  it('does not mistake a metadata-only envelope for data', () => {
+    expect(() => unwrapDisplayMessage({ message: 'Upgrade application' }, 206)).toThrow(
+      CumulusHttpError,
+    );
+  });
+});
+
+describe('fetchDisplayMessage', () => {
+  function mockHttp(post: ReturnType<typeof vi.fn>): AxiosInstance {
+    return { post } as unknown as AxiosInstance;
+  }
+
+  it('sends username, role, appVersion and os in the BODY', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 200, data: flatPayload() });
+    await fetchDisplayMessage({
+      http: mockHttp(post),
+      baseUrlCumulus: 'https://clcloud.minimed.eu/connect/carepartner/v13',
+      getUser: async () => ({ username: 'jlee', role: 'PATIENT' }) as never,
+    });
+
+    const [url, body] = post.mock.calls[0];
+    expect(url).toBe('https://clcloud.minimed.eu/connect/carepartner/v13/display/message');
+    expect(body).toMatchObject({
+      username: 'jlee',
+      role: 'PATIENT',
+      appVersion: '3.8',
+      os: 'android',
+    });
+  });
+
+  it('resolves the linked patient for a care-partner account', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 200, data: flatPayload() });
+    await fetchDisplayMessage({
+      http: mockHttp(post),
+      baseUrlCumulus: 'https://x/v13',
+      getUser: async () => ({ username: 'carer', role: 'CARE_PARTNER_OUS' }) as never,
+      getLinkedPatients: async () => [{ username: 'jlee' }],
+    });
+
+    expect(post.mock.calls[0][1]).toMatchObject({ patientId: 'jlee', role: 'CARE_PARTNER_OUS' });
+  });
+
+  it('sends no patientId for a plain patient account', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 200, data: flatPayload() });
+    const getLinkedPatients = vi.fn();
+    await fetchDisplayMessage({
+      http: mockHttp(post),
+      baseUrlCumulus: 'https://x/v13',
+      getUser: async () => ({ username: 'jlee', role: 'PATIENT' }) as never,
+      getLinkedPatients: getLinkedPatients as never,
+    });
+
+    expect(post.mock.calls[0][1]).not.toHaveProperty('patientId');
+    expect(getLinkedPatients).not.toHaveBeenCalled();
+  });
+
+  it('refuses to send a request without a username or role', async () => {
+    const post = vi.fn();
+    await expect(
+      fetchDisplayMessage({
+        http: mockHttp(post),
+        baseUrlCumulus: 'https://x/v13',
+        getUser: async () => ({}) as never,
+      }),
+    ).rejects.toThrow(/no username/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});
