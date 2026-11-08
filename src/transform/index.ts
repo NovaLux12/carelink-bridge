@@ -22,6 +22,38 @@ function isMmolL(data: CareLinkData): boolean {
   return u === 'MMOL_L' || u === 'MMOL/L' || u === 'MMOL';
 }
 
+/**
+ * The device family as it should appear in Nightscout's `device` field.
+ *
+ * `medicalDeviceFamily` is declared non-optional on `CareLinkData`, but that is
+ * a description of the legacy payload, not a guarantee: the BLE endpoint
+ * (`blePereodicDataEndpoint`, used for 780G / Guardian / Instinct-era devices)
+ * returns the family under `deviceFamily` and MAY omit `medicalDeviceFamily`
+ * entirely. Reading it blind threw
+ * `TypeError: Cannot read properties of undefined (reading 'toLowerCase')`
+ * inside transform() — a crash on the very first real BLE payload, which is
+ * exactly the shape arriving when the Instinct sensor enters service.
+ *
+ * Falls through `deviceFamily` before giving up, and never throws: an unnamed
+ * device is a cosmetic wart; a crashed transform is a total data outage.
+ */
+function deviceFamilyName(data: CareLinkData): string | undefined {
+  const candidates = [data.medicalDeviceFamily, data.deviceFamily];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function deviceName(data: CareLinkData): string {
+  const family = deviceFamilyName(data);
+  // Lowercase matches the historical `connect-paradigm` / `connect-guardian`
+  // shape Nightscout already holds, so existing series are not split.
+  return family ? 'connect-' + family.toLowerCase() : 'connect-unknown';
+}
+
 function normalizeSgToMgdl(sg: number, data: CareLinkData): number {
   if (!isMmolL(data)) return sg;
   // Round to the nearest integer mg/dL — Nightscout is mg/dL-native and
@@ -43,10 +75,6 @@ function timestampAsString(timestamp: number): string {
     return new Date().toISOString();
   }
   return new Date(timestamp).toISOString();
-}
-
-function deviceName(data: CareLinkData): string {
-  return 'connect-' + data.medicalDeviceFamily.toLowerCase();
 }
 
 /**
@@ -75,7 +103,12 @@ function deviceStatusEntry(
   const lastAlarm: NightscoutLastAlarmAnnotation | undefined =
     lastAlarmEval?.annotation;
 
-  if (data.medicalDeviceFamily === 'GUARDIAN') {
+  // Resolve once: on a BLE payload the family may arrive only as
+  // `deviceFamily`, so reading `medicalDeviceFamily` directly would miss the
+  // GUARDIAN branch as well as crash in deviceName(). Same fix, same reason.
+  const family = deviceFamilyName(data);
+
+  if (family === 'GUARDIAN') {
     return {
       created_at: timestampAsString(data.lastMedicalDeviceDataUpdateServerTime),
       device: deviceName(data),
@@ -95,7 +128,7 @@ function deviceStatusEntry(
         conduitSensorInRange: data.conduitSensorInRange,
         medicalDeviceBatteryLevelPercent: data.medicalDeviceBatteryLevelPercent,
         pumpBatteryLevelPercent: data.pumpBatteryLevelPercent,
-        medicalDeviceFamily: data.medicalDeviceFamily,
+        medicalDeviceFamily: family,
       },
     };
   }
@@ -151,7 +184,12 @@ function sgvEntries(
   const sgvs: NightscoutSGVEntry[] = data.sgs
     .filter(entry => entry.kind === 'SG' && entry.sg !== 0)
     .map(sgv => {
-      const timestamp = parsePumpTime(sgv.datetime, offset, offsetMilliseconds);
+      // Readings from the `display/message` route carry `timestamp` instead of
+      // `datetime`. Both are local-time strings with no zone, so the same
+      // pump-offset correction applies; preferring `timestamp` matches the
+      // reference client. Falling back keeps every older payload identical.
+      const rawTime = sgv.timestamp ?? sgv.datetime ?? '';
+      const timestamp = parsePumpTime(rawTime, offset, offsetMilliseconds);
       return {
         type: 'sgv' as const,
         sgv: normalizeSgToMgdl(sgv.sg, data),
