@@ -236,7 +236,10 @@ export class CareLinkClient {
     try {
       const monitorResp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
       const { family, model } = deviceIdentity(monitorResp.data);
-      if (monitorResp.data && this.isBleDevice(family, model)) {
+      const bleMatch = monitorResp.data ? this.isBleDevice(family, model) : false;
+      logDeviceIdentity('monitor/data (carepartner)', monitorResp.data, bleMatch);
+
+      if (monitorResp.data && bleMatch) {
         logger.log('BLE device detected for carepartner, using BLE endpoint');
         return this.fetchBleDeviceData(patientId, 'carepartner');
       }
@@ -329,8 +332,10 @@ export class CareLinkClient {
     try {
       const resp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
       const { family, model } = deviceIdentity(resp.data);
+      const bleMatch = resp.data ? this.isBleDevice(family, model) : false;
+      logDeviceIdentity('monitor/data (patient)', resp.data, bleMatch);
 
-      if (resp.data && this.isBleDevice(family, model)) {
+      if (resp.data && bleMatch) {
         logger.log('BLE device detected, using BLE endpoint');
         return this.fetchBleDeviceData(this.accountUsername());
       }
@@ -545,6 +550,73 @@ function deviceIdentity(
     family: pick('deviceFamily') ?? pick('medicalDeviceFamily'),
     model: pick('deviceModel') ?? pick('sensorModel'),
   };
+}
+
+/**
+ * Which keys in a CareLink payload carry device identity (#111).
+ *
+ * Validation day needs the answer to "what family string did the cloud
+ * actually send?", and the honest answer today is that nobody knows: the
+ * documented vocabulary (`GUARDIAN` / `NGP` / `CGM` / `CC`) and the spellings
+ * `isBleDevice()` matches (`BLE…`, `SIMPLERA…`) may not overlap at all, and
+ * `CC` reportedly covers Instinct. Rather than widen the matcher on a guess,
+ * log the identity keys that are present — values included, since a device
+ * family name is not a secret — so the widening can be made on evidence.
+ *
+ * Deliberately enumerates a fixed key list instead of dumping the payload:
+ * the response also carries glucose readings and alarm history, which have no
+ * business in a log file.
+ */
+const DEVICE_IDENTITY_KEYS = [
+  'deviceFamily',
+  'medicalDeviceFamily',
+  'deviceModel',
+  'sensorModel',
+  'medicalDeviceModel',
+  'deviceModelMapping',
+  'deviceToFamilyMapping',
+  'deviceSerialNumber',
+] as const;
+
+export function deviceIdentitySnapshot(
+  data: CareLinkData | undefined,
+): Record<string, unknown> {
+  const raw = (data ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of DEVICE_IDENTITY_KEYS) {
+    const value = raw[key];
+    if (value !== undefined && value !== null && value !== '') {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/**
+ * Log the device identity a response carried, at most once per distinct shape.
+ *
+ * The failure this exists to prevent is silent: an unrecognised family means
+ * `isBleDevice()` returns false, the BLE branch is skipped, and the legacy
+ * endpoint answers with an empty or useless body — "Fetch Success" with zero
+ * glucose data, the exact class of bug upstream PR #2 fixed. Journald should
+ * say so out loud (issue #81 step 3).
+ */
+let lastIdentityLogged: string | undefined;
+
+export function logDeviceIdentity(
+  endpoint: string,
+  data: CareLinkData | undefined,
+  bleMatch: boolean,
+): void {
+  const snapshot = deviceIdentitySnapshot(data);
+  const signature = `${endpoint}|${JSON.stringify(snapshot)}|${bleMatch}`;
+  if (signature === lastIdentityLogged) return;
+  lastIdentityLogged = signature;
+
+  logger.log(
+    `Device identity from ${endpoint}: ${JSON.stringify(snapshot)} ` +
+      `(BLE match: ${bleMatch ? 'yes' : 'NO'})`,
+  );
 }
 
 /**
