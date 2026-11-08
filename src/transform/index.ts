@@ -82,6 +82,64 @@ function normalizeSgToMgdl(sg: number, data: CareLinkData): number {
  * string is expressed in. A `±HH:MM`-style numeric fallback is used when the
  * named zone is absent; otherwise the string is parsed as-is.
  */
+/**
+ * Interpret a zoneless wall-clock string as a time in a named IANA zone,
+ * returning epoch ms. Returns NaN when the zone or the string is unusable.
+ *
+ * Two problems are being solved at once.
+ *
+ * 1. `Date.parse('Nov 8, 2026 01:30:00')` binds the string to the HOST's zone.
+ *    Measured: the same reading yields `2026-11-08T01:30Z` on a London host and
+ *    `2026-11-08T06:30Z` on a New York host — five hours apart, purely from
+ *    where the process runs. Appending ` UTC` makes the parse host-independent
+ *    (verified on New York and Tokyo hosts), giving the reading's own
+ *    components as if they were UTC. That value is a scaffold, not the answer.
+ *
+ * 2. The scaffold must then be shifted by the target zone's offset AT THAT
+ *    INSTANT (so DST is handled). `Intl.DateTimeFormat` with an explicit
+ *    `timeZone` renders any instant in that zone, which is how the offset is
+ *    measured — no date library needed.
+ *
+ * Iterated twice because the offset itself can change the instant's zone
+ * bucket across a DST boundary; one pass is correct except within an hour of a
+ * transition, two settles it.
+ */
+function parseInZone(rawTime: string, zone: string): number {
+  // Scafold: the reading's components, armed as UTC so the host cannot skew it.
+  const scaffold = Date.parse(rawTime.replace(/\s*$/, '') + ' UTC');
+  if (!Number.isFinite(scaffold)) return NaN;
+
+  const fmt = (() => {
+    try {
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: zone,
+        hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch {
+      return undefined; // invalid IANA zone
+    }
+  })();
+  if (!fmt) return NaN;
+
+  /** Offset (ms) of `zone` at instant `at`, i.e. localWallClock - utc. */
+  const offsetAt = (at: number): number => {
+    const r = fmt.formatToParts(new Date(at));
+    const g = (t: string) => Number(r.find((p) => p.type === t)?.value);
+    const asIfUtc = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'), g('second'));
+    return Number.isFinite(asIfUtc) ? asIfUtc - at : NaN;
+  };
+
+  let instant = scaffold;
+  for (let i = 0; i < 2; i++) {
+    const off = offsetAt(instant);
+    if (!Number.isFinite(off)) return NaN;
+    instant = scaffold - off;
+  }
+  return instant;
+}
+
 function resolveReadingTime(
   rawTime: string,
   offsetMilliseconds: number,
@@ -93,11 +151,25 @@ function resolveReadingTime(
     if (Number.isFinite(parsed)) return parsed;
   }
 
-  // No usable device offset. Treat the wall-clock string as being in the
-  // patient's own zone, and let the host convert it.
+  // No usable device offset. The payload's `clientTimeZoneName` says which zone
+  // the wall-clock string is expressed in, so bind it to THAT zone — never to
+  // the host's. Falling back to the host zone is the bug this avoids: it makes
+  // the same payload mean different instants on different machines.
+  const zone = data.clientTimeZoneName;
+  if (zone) {
+    const zoned = parseInZone(rawTime, zone);
+    if (Number.isFinite(zoned)) return zoned;
+  }
+
+  // No zone, or it did not resolve. `Date.parse` binds to the host zone, which
+  // is only correct when the host IS in the patient's zone. Log it so the
+  // assumption is visible rather than silent.
+  logger.log(
+    'No usable clientTimeZoneName — interpreting "' + rawTime +
+      '" as host-local time (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')',
+  );
   const naive = Date.parse(rawTime);
-  if (!Number.isFinite(naive)) return NaN;
-  return naive;
+  return Number.isFinite(naive) ? naive : NaN;
 }
 
 /**
