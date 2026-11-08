@@ -104,9 +104,16 @@ export function cumulusBaseUrlFrom(
     : undefined;
 }
 
-/** A reading's timestamp: newer payloads use `timestamp`, older use `datetime`. */
+/**
+ * A reading's timestamp, for ORDERING only.
+ *
+ * `datetime` before `timestamp`, matching xDrip's SensorGlucose.getDate()
+ * (SensorGlucose.java:31-36). Both are zoneless wall-clock strings; this is
+ * used purely to sort, so a host-zone binding is acceptable here — the dating
+ * that matters happens in resolveReadingTime(), which is zone-aware.
+ */
 function readingTime(sg: { timestamp?: string; datetime?: string }): number {
-  const raw = sg.timestamp || sg.datetime;
+  const raw = sg.datetime || sg.timestamp;
   const parsed = raw ? Date.parse(raw) : NaN;
   return Number.isNaN(parsed) ? 0 : parsed;
 }

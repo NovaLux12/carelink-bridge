@@ -161,15 +161,30 @@ function resolveReadingTime(
     if (Number.isFinite(zoned)) return zoned;
   }
 
-  // No zone, or it did not resolve. `Date.parse` binds to the host zone, which
-  // is only correct when the host IS in the patient's zone. Log it so the
-  // assumption is visible rather than silent.
+  // No zone, or it did not resolve.
+  //
+  // Fall back to UTC, NOT the host zone. The host zone makes the same payload
+  // mean different instants on different machines — the exact bug this function
+  // exists to prevent. UTC is at least deterministic: it is wrong by a known,
+  // constant offset rather than by whatever the deployment happens to be set
+  // to, and the log line below makes the assumption visible.
+  //
+  // An operator who knows the patient's zone can pin it with
+  // CARELINK_ASSUME_TIMEZONE, which is the honest way to supply the missing
+  // fact rather than inferring it from the server's locale.
+  const assumed = process.env['CARELINK_ASSUME_TIMEZONE']?.trim();
+  if (assumed) {
+    const zoned = parseInZone(rawTime, assumed);
+    if (Number.isFinite(zoned)) return zoned;
+  }
+
   logger.log(
     'No usable clientTimeZoneName — interpreting "' + rawTime +
-      '" as host-local time (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')',
+      '" as UTC. If the patient is not in UTC, set CARELINK_ASSUME_TIMEZONE ' +
+      "(e.g. 'Europe/London') or every reading will be offset.",
   );
-  const naive = Date.parse(rawTime);
-  return Number.isFinite(naive) ? naive : NaN;
+  const utc = Date.parse(rawTime.replace(/\s*$/, '') + ' UTC');
+  return Number.isFinite(utc) ? utc : NaN;
 }
 
 /**
@@ -183,7 +198,7 @@ function resolveReadingTime(
 function newestReadingTime(data: CareLinkData): number {
   let newest = NaN;
   for (const sgv of data.sgs ?? []) {
-    const raw = sgv.timestamp ?? sgv.datetime;
+    const raw = sgv.datetime ?? sgv.timestamp;
     if (!raw) continue;
     const parsed = resolveReadingTime(raw, NaN, data);
     if (Number.isFinite(parsed) && (!Number.isFinite(newest) || parsed > newest)) {
@@ -363,11 +378,19 @@ function sgvEntries(
   for (const sgv of data.sgs) {
     if (sgv.kind !== 'SG' || sgv.sg === 0) continue;
 
-    // Readings from the `display/message` route carry `timestamp` instead of
-    // `datetime`. Both are local wall-clock strings with no zone, so the same
-    // offset correction applies; preferring `timestamp` matches the reference
-    // client.
-    const rawTime = sgv.timestamp ?? sgv.datetime ?? '';
+    // Precedence: `datetime` FIRST, then `timestamp`.
+    //
+    // SensorGlucose.getDate() (xDrip SensorGlucose.java:31-36) returns
+    // `datetimeAsDate` when non-null and only falls back to `timestamp`:
+    //
+    //     if (this.datetimeAsDate != null) return datetimeAsDate;
+    //     else return timestamp;
+    //
+    // An earlier version of this code claimed the opposite "matches the
+    // reference client" — it did not. Both carry the same zoneless wall-clock
+    // form, so preferring `datetime` costs nothing and agrees with the client
+    // that has years of production use.
+    const rawTime = sgv.datetime ?? sgv.timestamp ?? '';
 
     // Never fall through to the current time. An unresolvable reading is
     // dropped, not stamped "now": a dropped reading is a visible gap in the
