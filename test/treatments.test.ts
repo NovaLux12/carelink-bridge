@@ -202,4 +202,92 @@ describe('mapMarkers', () => {
       notes: 'carelink-marker',
     });
   });
+
+  it('does not lose insulin when two boluses share an index', () => {
+    // REGRESSION. The first implementation kept boluses in a Map keyed by
+    // index, so a second INSULIN at the same slot OVERWROTE the first: 3 U + 4 U
+    // was recorded as 4 U. Under-counting delivered insulin is the dangerous
+    // direction for a dosing record, so this is asserted on the TOTAL.
+    const res = mapMarkers(
+      [
+        { index: 280, type: 'INSULIN', amount: 3 },
+        { index: 280, type: 'INSULIN', amount: 4 },
+      ],
+      ANCHOR,
+    );
+    const total = res.treatments.reduce(
+      (s, t) => s + ((t.insulin as number | undefined) ?? 0), 0,
+    );
+    expect(total).toBe(7);
+    expect(res.treatments).toHaveLength(2);
+  });
+
+  it('gives two boluses at one index distinct ids', () => {
+    // They share a timestamp and an eventType, so the id must still separate
+    // them or Nightscout would dedup the second away — the same loss by another
+    // route.
+    const res = mapMarkers(
+      [
+        { index: 280, type: 'INSULIN', amount: 3 },
+        { index: 280, type: 'INSULIN', amount: 4 },
+      ],
+      ANCHOR,
+    );
+    const ids = res.treatments.map((t) => t._id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('consumes only one bolus per meal, leaving a second as a correction', () => {
+    const res = mapMarkers(
+      [
+        { index: 280, type: 'MEAL', amount: 40 },
+        { index: 280, type: 'INSULIN', amount: 4 },
+        { index: 280, type: 'INSULIN', amount: 2 },
+      ],
+      ANCHOR,
+    );
+    const meal = res.treatments.find((t) => t.eventType === 'Meal Bolus');
+    expect(meal).toMatchObject({ carbs: 40, insulin: 4 });
+    const corr = res.treatments.filter((t) => t.eventType === 'Correction Bolus');
+    expect(corr).toHaveLength(1);
+    expect(corr[0].insulin).toBe(2);
+    // Total insulin is preserved across the whole mapping.
+    const total = res.treatments.reduce(
+      (s, t) => s + ((t.insulin as number | undefined) ?? 0), 0,
+    );
+    expect(total).toBe(6);
+  });
+
+  it('keeps two IDENTICAL boluses distinct, not just differently-sized ones', () => {
+    // The hash reads (time, eventType, carbs, insulin) — every field two
+    // identical boluses share. Without an occurrence discriminator they collide
+    // on _id and Nightscout's dedup silently drops the second, which is the
+    // lost-insulin defect arriving by a different route.
+    const res = mapMarkers(
+      [
+        { index: 280, type: 'INSULIN', amount: 3 },
+        { index: 280, type: 'INSULIN', amount: 3 },
+      ],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(2);
+    expect(new Set(res.treatments.map((t) => t._id)).size).toBe(2);
+    const total = res.treatments.reduce(
+      (s, t) => s + ((t.insulin as number | undefined) ?? 0), 0,
+    );
+    expect(total).toBe(6);
+  });
+
+  it('is still idempotent for identical markers across two calls', () => {
+    // The occurrence counter must be per-CALL. If it were module-level, a second
+    // fetch would mint new ids for the same markers and duplicate them.
+    const markers = [
+      { index: 280, type: 'INSULIN', amount: 3 },
+      { index: 280, type: 'INSULIN', amount: 3 },
+    ];
+    const a = mapMarkers(markers, ANCHOR).treatments.map((t) => t._id);
+    const b = mapMarkers(markers, ANCHOR).treatments.map((t) => t._id);
+    expect(a).toEqual(b);
+    expect(new Set(a).size).toBe(2);
+  });
 });
