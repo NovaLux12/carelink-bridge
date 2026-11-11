@@ -52,9 +52,12 @@ const entriesUrl = baseUrl + '/api/v1/entries.json';
 const devicestatusUrl = baseUrl + '/api/v1/devicestatus.json';
 const treatmentsUrl = baseUrl + '/api/v1/treatments.json';
 
-const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(item => item.date);
+const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(item => item.date, {
+  label: 'sgv',
+});
 const filterDeviceStatus = makeRecencyFilter<NightscoutDeviceStatus>(
   item => new Date(item.created_at).getTime(),
+  { label: 'devicestatus' },
 );
 
 // --- Stale-data tracking (seeded from persistent state) ---
