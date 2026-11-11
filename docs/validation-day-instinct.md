@@ -51,6 +51,40 @@ Device identity from monitor/data (patient): {"deviceFamily":"…","deviceModel"
 
 **This one line answers question 1.** Copy it verbatim into the issue.
 
+### Step 2b — read the payload census line
+
+Immediately after it, the same fetch logs a **payload census** — what the
+response actually carried, by field name and enum token:
+
+```
+Payload census (display/message): {"present":["activeInsulin","deviceFamily",…],
+  "absent":["therapyAlgorithmState","markers",…],
+  "autoMode":{"shieldState":"AUTO_BASAL","shieldKnown":true,
+              "plgmState":"MONITORING","plgmKnown":true},
+  "markerTypes":["BG_READING","INSULIN","MEAL"],
+  "counts":{"sgv":288,"markers":14}}
+```
+
+**Copy this verbatim too.** It is the single most valuable artefact of the day,
+because the bridge's pump-data schema came from Medtronic's own client parser
+(`carelink-api-research` area DP) — which proves what the *app* reads, never
+that a pump *sends* it. The census turns that inference into an observation.
+
+Reading it:
+
+| What you see | What it means |
+|---|---|
+| `therapyAlgorithmState` in `present`, `shieldKnown: true`, `plgmKnown: true` | The auto-mode schema is real on your firmware. Nothing to fix. |
+| `therapyAlgorithmState` in `present` with `*Known: false` | **A token outside the recorded vocabulary.** This is a finding, not a bug in the bridge — file it with the token value. |
+| `therapyAlgorithmState` in `absent` | The object never arrives on your account. The `autoMode` devicestatus block will simply not appear, which is the correct behaviour and worth knowing before you go looking for a fault. |
+| `markerTypes` includes `MEAL` / `INSULIN` | Treatments will populate. Check Nightscout for `Meal Bolus` entries. |
+| `markerTypes` includes `AUTO_BASAL_DELIVERY` or `AUTO_MODE_STATUS` | These are declared by the vendor and never handled by anyone. Their payload shape is unknown — **capture one and open an issue**; nobody has ever seen what they carry. |
+| `unknownMarkerTypes` non-empty | A marker type outside the 11-token vocabulary. File the token. |
+| `alarm` present with `suppressed: true` | The pump fired a code the vendor's own client refuses to name. Expected for `00-1` and `121`. |
+
+The census is deduped on **shape**, not on counts, so it appears once per
+distinct payload shape even though SGV counts change every fetch.
+
 Interpretation:
 
 | What you see | What it means | Next step |

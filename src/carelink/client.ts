@@ -10,6 +10,7 @@ import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import { cumulusBaseUrlFrom, fetchDisplayMessage } from './cumulus.js';
 import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
+import { logPayloadCensus } from '../payload-census.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -307,6 +308,11 @@ export class CareLinkClient {
 
       const { family, model } = deviceIdentity(data);
       logDeviceIdentity('display/message', data, this.isBleDevice(family, model));
+      // What actually arrived, by field name and enum token. Validation day has
+      // one chance to record this before the session gets busy, and the
+      // research corpus could only predict the schema, never confirm a pump
+      // populates it. See src/payload-census.ts.
+      logPayloadCensus('display/message', data, m => logger.log(m));
       logger.log('GET data (display/message)');
       return data;
     } catch (e) {
@@ -363,6 +369,7 @@ export class CareLinkClient {
       const { family, model } = deviceIdentity(monitorResp.data);
       const bleMatch = monitorResp.data ? this.isBleDevice(family, model) : false;
       logDeviceIdentity('monitor/data (carepartner)', monitorResp.data, bleMatch);
+      logPayloadCensus('monitor/data (carepartner)', monitorResp.data, m => logger.log(m));
 
       if (monitorResp.data && bleMatch) {
         logger.log('BLE device detected for carepartner, using BLE endpoint');
@@ -459,6 +466,7 @@ export class CareLinkClient {
       const { family, model } = deviceIdentity(resp.data);
       const bleMatch = resp.data ? this.isBleDevice(family, model) : false;
       logDeviceIdentity('monitor/data (patient)', resp.data, bleMatch);
+      logPayloadCensus('monitor/data (patient)', resp.data, m => logger.log(m));
 
       if (resp.data && bleMatch) {
         logger.log('BLE device detected, using BLE endpoint');
