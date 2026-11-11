@@ -5,7 +5,33 @@ import { mapMarkers } from './treatments.js';
 
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
-import { guessPumpOffset, guessPumpOffsetMilliseconds } from './pump-offset.js';
+import { guessPumpOffset, guessPumpOffsetMilliseconds, pumpClockReading } from './pump-offset.js';
+
+/**
+ * A devicestatus entry carrying the optional pump-clock drift annotation.
+ *
+ * Declared here rather than on `NightscoutDeviceStatus` so the published shape
+ * stays as-is until a Nightscout consumer is confirmed to read it. The field is
+ * additive and top-level (alongside `last_alarm`), which is where the research
+ * memo's P0.3 recommendation places it.
+ */
+type DeviceStatusWithDrift = NightscoutDeviceStatus & {
+  /**
+   * Pump clock drift, in minutes, off the nearest real UTC offset.
+   *
+   * Present ONLY when (a) the payload carries a device clock we can compare
+   * against the server's, and (b) the measured drift is non-zero. Absent means
+   * "not measurable" — never 0 as a default. A `0` here is a positive claim
+   * that the pump's clock sits on the quarter-hour grid; a v13
+   * display/message payload has no pump clock at all, so writing 0 for it
+   * would assert something we never measured.
+   *
+   * SCOPE, measured: this annotation detects CLOCK DRIFT, not DST. A DST shift
+   * is a whole number of quarter hours, so it rounds away and reports no
+   * drift while the offset is an hour wrong (see test/dst-drift.test.ts).
+   */
+  clock_drift_minutes?: number;
+};
 
 const STALE_DATA_THRESHOLD_MINUTES = 20;
 
@@ -407,7 +433,17 @@ function deviceStatusEntry(
   data: CareLinkData,
   offset: string,
   offsetMilliseconds: number,
-): NightscoutDeviceStatus {
+): DeviceStatusWithDrift {
+  // Pump clock drift annotation (research memo P0.3). Present only when a
+  // device clock exists AND the drift is non-zero — see DeviceStatusWithDrift.
+  // `Math.abs` because a pump running 6 min fast and one running 6 min slow are
+  // equally worth an operator's attention, and the sign is already carried by
+  // the raw delta in the log line; the annotation is a magnitude alarm.
+  const clockReading = pumpClockReading(data);
+  const clockDrift =
+    clockReading && clockReading.driftMinutes !== 0
+      ? { clock_drift_minutes: Math.abs(clockReading.driftMinutes) }
+      : {};
   // Compute lastAlarm annotation + side-effect log once per transform call.
   // Both branches (GUARDIAN, pump) attach the same annotation. NEVER
   // publishes to /api/v1/treatments.json — see src/last-alarm.ts.
@@ -447,6 +483,7 @@ function deviceStatusEntry(
         battery: deviceBatteryPercent(data),
       },
       last_alarm: lastAlarm,
+      ...clockDrift,
 
 
       connect: {
@@ -471,6 +508,7 @@ function deviceStatusEntry(
       battery: data.conduitBatteryLevel,
     },
     last_alarm: lastAlarm,
+    ...clockDrift,
 
 
     pump: {
