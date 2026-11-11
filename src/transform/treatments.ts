@@ -73,9 +73,17 @@ export function treatmentId(
   eventType: string,
   carbs: number | undefined,
   insulin: number | undefined,
+  /**
+   * Position among same-keyed siblings, 0 for the first. Two IDENTICAL boluses
+   * at the same marker index share every field the hash reads — timestamp,
+   * eventType, and both amounts — so without this they hash to one id and
+   * Nightscout's `_id` dedup silently discards the second. That is the same
+   * lost-insulin defect as the Map overwrite, arriving by a different route.
+   */
+  occurrence = 0,
 ): string {
   const digest = createHash('sha1')
-    .update(`${createdMs}|${eventType}|${carbs ?? ''}|${insulin ?? ''}`)
+    .update(`${createdMs}|${eventType}|${carbs ?? ''}|${insulin ?? ''}|${occurrence}`)
     .digest('hex');
   return `carelink-marker-${digest.slice(0, 24)}`;
 }
@@ -123,7 +131,12 @@ export function mapMarkers(
     return out;
   }
 
-  const insulinByIndex = new Map<number, CareLinkMarker>();
+  // A Map here silently LOST insulin: two INSULIN markers sharing an index
+  // overwrote one another, so 3 U + 4 U was recorded as 4 U. Under-counting
+  // delivered insulin is the dangerous direction for a dosing record, so the
+  // boluses are kept as a LIST and consumed one at a time. Probed and confirmed
+  // before the fix (7 U in, 4 U out).
+  const insulinByIndex = new Map<number, CareLinkMarker[]>();
   const meals: CareLinkMarker[] = [];
   const others: CareLinkMarker[] = [];
 
@@ -133,7 +146,9 @@ export function mapMarkers(
     const t = m.type;
     if (typeof t !== 'string') continue;
     if (typeof m.index === 'number' && INSULIN_TYPES.has(t)) {
-      insulinByIndex.set(m.index, m);
+      const bucket = insulinByIndex.get(m.index);
+      if (bucket) bucket.push(m);
+      else insulinByIndex.set(m.index, [m]);
     } else if (typeof m.index === 'number' && MEAL_TYPES.has(t)) {
       meals.push(m);
     } else {
@@ -141,11 +156,18 @@ export function mapMarkers(
     }
   }
 
+  // Sibling counter: how many times this exact (time, eventType, carbs,
+  // insulin) tuple has already been emitted. Keeps identical markers distinct.
+  const seen = new Map<string, number>();
+
   const emit = (m: CareLinkMarker, eventType: string, carbs?: number, insulin?: number) => {
     const created = markerTime(m.index, anchorMs);
     if (created === null) { out.undatable++; return; }
+    const key = `${created}|${eventType}|${carbs ?? ''}|${insulin ?? ''}`;
+    const occurrence = seen.get(key) ?? 0;
+    seen.set(key, occurrence + 1);
     const t: Record<string, unknown> = {
-      _id: treatmentId(created, eventType, carbs, insulin),
+      _id: treatmentId(created, eventType, carbs, insulin, occurrence),
       eventType,
       created_at: new Date(created).toISOString(),
       enteredBy: 'carelink-bridge',
@@ -157,7 +179,10 @@ export function mapMarkers(
   };
 
   for (const meal of meals) {
-    const bolus = insulinByIndex.get(meal.index as number);
+    const bucket = insulinByIndex.get(meal.index as number);
+    // Consume exactly ONE bolus per meal. A meal split across two markers, or a
+    // second bolus at the same slot, must not be absorbed into the first.
+    const bolus = bucket && bucket.length > 0 ? bucket.shift() : undefined;
     // `amount` is carbs on a MEAL and units on an INSULIN; the vendor's own
     // mapping reads them from the same field name (`docs` §P1.1).
     const carbs = num(meal.amount) ?? num(meal.value);
@@ -165,18 +190,21 @@ export function mapMarkers(
     if (bolus) {
       emit(meal, 'Meal Bolus', carbs === undefined ? undefined : round(carbs),
            insulin === undefined ? undefined : round(insulin));
-      insulinByIndex.delete(meal.index as number);
     } else {
       // A meal with no bolus still happened; record the carbs.
       emit(meal, 'Carb Correction', carbs === undefined ? undefined : round(carbs), undefined);
     }
   }
 
-  for (const [, bolus] of insulinByIndex) {
-    const insulin = num(bolus.amount) ?? num(bolus.value);
-    if (insulin === undefined) { out.unmapped['INSULIN(no amount)'] =
-      (out.unmapped['INSULIN(no amount)'] ?? 0) + 1; continue; }
-    emit(bolus, 'Correction Bolus', undefined, round(insulin));
+  // Whatever boluses were left over are corrections. Iterate in index order so
+  // the output is deterministic regardless of the wire order.
+  for (const idx of [...insulinByIndex.keys()].sort((a, b) => a - b)) {
+    for (const bolus of insulinByIndex.get(idx) ?? []) {
+      const insulin = num(bolus.amount) ?? num(bolus.value);
+      if (insulin === undefined) { out.unmapped['INSULIN(no amount)'] =
+        (out.unmapped['INSULIN(no amount)'] ?? 0) + 1; continue; }
+      emit(bolus, 'Correction Bolus', undefined, round(insulin));
+    }
   }
 
   for (const m of others) {
