@@ -328,3 +328,46 @@ structurally-different Auth0 config and endpoint deprecation). The
 condition says *ending in* the full suffix deliberately — a substring
 check on `/v13` would admit `.../v131` — matching the suffix assertion
 `cumulus.endsWith(CUMULUS_V13_PATH_SUFFIX)` in `src/login-errors.ts`.
+
+## Amendment (2026-11-11) — the pin is unchanged, and the reason is now a test
+
+Area AO of the research repo closed the two tails area AH left open and settled
+the `??` question. **The decision is unchanged: `android/3.6` is still the pin.**
+No superseding ADR is written; this records the new evidence and one non-obvious
+consequence for anyone tempted to bump.
+
+**What AO measured** (`findings-log/2026-11-11-area-ao-adr-pin-guard/FINDINGS.md`,
+both hosts, 10 question cells + 2 controls, 0 retries):
+
+- `Auth0SSOConfiguration` is **present** on `3.5`, `3.7` and `3.8` (3/3 `CP[]`
+  entries each), and **absent** on `3.9` and `3.10`. Combined with AH, the key's
+  present-set is `{3.5, 3.6, 3.7, 3.8}`.
+- `UseSSOConfiguration` and `Auth0SSOConfiguration` appear **together or not at
+  all** in all 67 `CP[]` entries AO and AH measured between them, and where both
+  are present the selector holds the literal string
+  `Auth0SSOConfiguration` — so `selectAuth0ConfigUrl`'s `??` right operand is
+  unreachable on every recorded cell. It is **kept**, as a documented defensive
+  default, because the cumulus-track gate runs first and fails closed: it cannot
+  mask a mis-pin. See the comment block at that expression.
+
+**Why the pin does not move to 3.7 or 3.8.** Those tails return the **same
+document** as 3.6 — one tail-erased digest (`7850cce693d1`, AO §3) — so a bump
+is a **no-op**: identical bytes under a different request string. They remain the
+`VERIFIED_AUTH0_V13_FAMILY` fallbacks, and 3.6 stays pinned because it is the
+cell with the widest verified coverage (the 23-cell matrix, the cross-host
+byte-identity check, the `certificates[]` fingerprint and the SSO-config fetch
+all run against it).
+
+**Why a bump to 3.9/3.10 fails, and by which mechanism.** On those tails the
+Auth0 key is **absent** (AO), so `selectAuth0ConfigUrl` throws
+`NoAuth0SSOConfigurationError` — but only *after* the cumulus-track gate, which
+is the guard that also stops `3.5` (key present, cumulus v11). The two mechanisms
+are separately tested and neither substitutes for the other.
+
+**The axis is a keyed table, not a threshold** (AE, docs/03 §3b.6). `3.75` and
+`3.85` serve the fallback document while `3.7`/`3.8` serve the current one, so no
+monotone rule over the numeric value describes it. `src/discovery.ts` now carries
+`DISCOVERY_TAIL_TRACKS` — the recorded matrix as executable data — and
+`test/discovery.test.ts` asserts the reasoning above against it, so a future
+contributor who edits either the table or the pin is forced to reconcile them.
+That table, not this prose, is the guard.

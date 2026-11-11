@@ -26,6 +26,16 @@ import { createHash } from 'node:crypto';
  *
  * Issue #75 records the same matrix from a 2026-10-08 probe.
  *
+ * ⚠ Read the rows below `3.8` as **"not a keyed tail"**, not as "version 4.x is
+ * a cumulus-v2 release". Area AH (2026-11-10) established that only `3.4` and
+ * `3.6` are keyed among the tails it read, and area AO (2026-11-11) added
+ * `3.5`, `3.7`, `3.8` (keyed) against `3.9`, `3.10` (not keyed): a tail the
+ * server does not key on **echoes the request string and serves the default
+ * document**, which happens to declare cumulus v2. A fabricated tail and
+ * `99.99` return that same document byte-identically after the echo is erased,
+ * so "4.0 -> v2" is a statement about the *fallback document*, not about 4.0.
+ * `DISCOVERY_TAIL_TRACKS` below is that table made executable.
+ *
  * **The verified Auth0 + cumulus-v13 family is exactly `android/3.6`,
  * `android/3.7`, `android/3.8`** — see `VERIFIED_AUTH0_V13_FAMILY` below. Only
  * these are valid fallback pins: they are the only probed versions that both
@@ -64,12 +74,28 @@ import { createHash } from 'node:crypto';
  * what #75 fixes. Do not treat the key as a track signal; gate on
  * `baseUrlCumulus`. See ADR 0002 Notes for the full record.
  *
- * Bumping this to a "newer"-looking number will silently drop onto a config
- * with no Auth0 SSO URL and break login. Keep it at a version verified to
- * return Auth0SSOConfiguration.
+ * Bumping this to a "newer"-looking number buys nothing and can cost the login.
+ * The pin is a **table entry**, not a threshold (area AE), so there is no
+ * "next version" to move to:
+ *
+ *   - `3.7` / `3.8` re-derive the `3.6` document (same tail-erased digest), so
+ *     bumping to them is a **no-op** — a different request string for identical
+ *     bytes. They stay in `VERIFIED_AUTH0_V13_FAMILY` as *fallbacks*, not as
+ *     better pins.
+ *   - `3.5` carries the Auth0 key but sits on cumulus **v11** — caught only by
+ *     the track gate in `selectAuth0ConfigUrl`.
+ *   - `3.9` / `3.10` / `4.x` are **not keyed tails**: they serve the fallback
+ *     document, which carries no Auth0 key at all.
+ *   - No unprobed tail may be assumed to behave like a probed one in either
+ *     direction: `3.75` and `3.85` are fallback while `3.7`/`3.8` are current,
+ *     so the axis is not monotone in the numeric value.
+ *
+ * Keep it at a version verified to return Auth0SSOConfiguration *and* declare
+ * cumulus v13; `DISCOVERY_TAIL_TRACKS` below records which those are.
  *
  * Source: https://github.com/NovaLux12/carelink-api-research/blob/main/findings-log/medtronic-carelink-2026-07-21/01-endpoint-matrix.md
- * (table at the top of the file), re-probed live 2026-10-09.
+ * (table at the top of the file), re-probed live 2026-10-09; app-version axis
+ * re-derived 2026-11-10 (area AH) and 2026-11-11 (area AO).
  */
 export const DISCOVERY_APP_VERSION = 'android/3.6';
 
@@ -88,6 +114,72 @@ export const DISCOVERY_APP_VERSION = 'android/3.6';
  *     cumulus v2, no Auth0 selector.
  */
 export const VERIFIED_AUTH0_V13_FAMILY = ['android/3.6', 'android/3.7', 'android/3.8'] as const;
+
+/**
+ * The recorded app-version axis, as executable data — so the pin's reasoning is
+ * asserted by a test rather than asserted in a comment.
+ *
+ * Every row is a tail this project has actually probed, with the fields that
+ * decide whether the pin is safe. Hosts: `.eu` and `.com` by area AO/AH/AE, plus
+ * `-trials` where the pass reached it. Where the passes disagree in coverage the
+ * row says so; no row is inferred from a neighbouring row.
+ *
+ * Evidence per row:
+ *   - `android/3.4`   — AH 2026-11-10 (§2), both hosts: cumulus v11, CP 3,
+ *                       CLINICAL region, **no** Auth0 key. (docs/03 §3 had
+ *                       wrongly grouped it with the v2 cells.)
+ *   - `android/3.5`   — AO 2026-11-11 (§3), both hosts: Auth0 key on 3/3 CP
+ *                       entries, cumulus **v11**, document class `v11`
+ *                       (digest 31b22e731f89 — distinct from both neighbours).
+ *   - `android/3.6`   — control cell, re-derived by AO (§2) and AE (§3):
+ *                       Auth0 key 3/3, cumulus v13, class `current`.
+ *   - `android/3.7`   — AE 2026-11-10 (§3) and AO 2026-11-11 (§3): class
+ *                       `current`, cumulus v13, Auth0 key present.
+ *   - `android/3.8`   — same as 3.7.
+ *   - `android/3.9`   — AO 2026-11-11 (§3), both hosts: **no** Auth0 key,
+ *                       cumulus v2, CP 2 — the **fallback** document.
+ *   - `android/3.10`  — same as 3.9.
+ *   - `android/4.0`   — AH 2026-11-10 (§2): no Auth0 key, cumulus v2. AE/AH
+ *                       established this is not a version-specific release at
+ *                       all: 4.0 is simply **not keyed**, so it re-derives the
+ *                       fallback document that a fabricated tail also gets.
+ *   - `android/99.99`, and area AO's fabricated control — unkeyed tails, same
+ *                       fallback document byte-for-byte after the echoed
+ *                       request string is erased.
+ *
+ * `documentClass: 'fallback'` therefore means "this tail is not in the server's
+ * keyed table", NOT "this is the v2 generation of the API". That distinction is
+ * area AE's finding (§3b.6 of docs/03): the rule is a table keyed on the
+ * string, not a threshold on the numeric value, and `L L C L C L L` across the
+ * seven interior tails cannot be produced by any monotone threshold.
+ *
+ * Two consequences a reader must not lose:
+ *
+ *  1. **A bump to 3.7 or 3.8 is a no-op, not an improvement.** They are the
+ *     `current` document (same tail-erased digest as 3.6), so the pin would
+ *     fetch the same bytes under a different request string. 3.6 stays pinned
+ *     because it is the cell with the widest verified coverage — the 23-cell
+ *     matrix, the byte-identity check across hosts, the certificates[]
+ *     fingerprint and the SSO-config fetch all run against it.
+ *  2. **A bump to 3.9/3.10/4.x is caught by the cumulus-track gate, not by key
+ *     presence.** On 3.9 and 3.10 the Auth0 key is *absent* (AO), and on 4.x it
+ *     is absent too (AH), so key absence happens to stop those too; on 3.5 the
+ *     key is present and only the track gate stops it. Those two mechanisms are
+ *     separately tested; neither is a substitute for the other.
+ */
+export const DISCOVERY_TAIL_TRACKS = [
+  { tail: 'android/3.4', cumulus: 'v11', auth0Key: false, documentClass: 'v11' },
+  { tail: 'android/3.5', cumulus: 'v11', auth0Key: true, documentClass: 'v11' },
+  { tail: 'android/3.6', cumulus: 'v13', auth0Key: true, documentClass: 'current' },
+  { tail: 'android/3.7', cumulus: 'v13', auth0Key: true, documentClass: 'current' },
+  { tail: 'android/3.8', cumulus: 'v13', auth0Key: true, documentClass: 'current' },
+  { tail: 'android/3.9', cumulus: 'v2', auth0Key: false, documentClass: 'fallback' },
+  { tail: 'android/3.10', cumulus: 'v2', auth0Key: false, documentClass: 'fallback' },
+  { tail: 'android/4.0', cumulus: 'v2', auth0Key: false, documentClass: 'fallback' },
+] as const;
+
+/** What one recorded tail says about the pin. */
+export type DiscoveryTailTrack = (typeof DISCOVERY_TAIL_TRACKS)[number];
 
 /**
  * The cumulative-version path suffix the bridge requires the discovery

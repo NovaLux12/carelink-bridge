@@ -5,7 +5,33 @@ import { mapMarkers } from './treatments.js';
 
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
-import { guessPumpOffset, guessPumpOffsetMilliseconds } from './pump-offset.js';
+import { guessPumpOffset, guessPumpOffsetMilliseconds, pumpClockReading } from './pump-offset.js';
+
+/**
+ * A devicestatus entry carrying the optional pump-clock drift annotation.
+ *
+ * Declared here rather than on `NightscoutDeviceStatus` so the published shape
+ * stays as-is until a Nightscout consumer is confirmed to read it. The field is
+ * additive and top-level (alongside `last_alarm`), which is where the research
+ * memo's P0.3 recommendation places it.
+ */
+type DeviceStatusWithDrift = NightscoutDeviceStatus & {
+  /**
+   * Pump clock drift, in minutes, off the nearest real UTC offset.
+   *
+   * Present ONLY when (a) the payload carries a device clock we can compare
+   * against the server's, and (b) the measured drift is non-zero. Absent means
+   * "not measurable" — never 0 as a default. A `0` here is a positive claim
+   * that the pump's clock sits on the quarter-hour grid; a v13
+   * display/message payload has no pump clock at all, so writing 0 for it
+   * would assert something we never measured.
+   *
+   * SCOPE, measured: this annotation detects CLOCK DRIFT, not DST. A DST shift
+   * is a whole number of quarter hours, so it rounds away and reports no
+   * drift while the offset is an hour wrong (see test/dst-drift.test.ts).
+   */
+  clock_drift_minutes?: number;
+};
 
 const STALE_DATA_THRESHOLD_MINUTES = 20;
 
@@ -269,11 +295,155 @@ function sensorHours(
   return undefined;
 }
 
+/**
+ * The two recorded `therapyAlgorithmState` vocabularies
+ * (carelink-api-research area DP §3). Disjoint sets, five and three tokens.
+ */
+const AUTO_MODE_SHIELD_STATES = new Set(['AUTO_BASAL', 'SAFE_BASAL', 'FEATURE_OFF']);
+const PLGM_LGS_STATES = new Set([
+  'FEATURE_OFF',
+  'REFRACTORY_PERIOD',
+  'MONITORING',
+  'SUSPEND_FIRED_PLGM',
+  'SUSPEND_FIRED_LGS',
+]);
+const SUSPEND_FIRED_STATES = new Set(['SUSPEND_FIRED_PLGM', 'SUSPEND_FIRED_LGS']);
+
+export interface AutoModeSnapshot {
+  shieldState?: string;
+  plgmState?: string;
+  /**
+   * True only for the two tokens that mean delivery has stopped. `false` for
+   * every other KNOWN token — and `null` when the token was not recognised, so
+   * an unknown state cannot be read as "not suspended". A boolean `false`
+   * there would be a quiet lie in a clinical field: the whole point of
+   * surfacing the raw token is that the consumer must not assume it.
+   */
+  suspendFired: boolean | null;
+  /** Whether both present tokens were inside the recorded vocabulary. */
+  recognised: boolean;
+  /** Tokens that were present but outside the recorded vocabulary. */
+  unrecognisedStates: string[];
+}
+
+/**
+ * Describe `therapyAlgorithmState` without translating it.
+ *
+ * The tokens are passed through verbatim: they were recovered from the
+ * vendor's own parser and never seen on a captured payload (area DP §3), so a
+ * new token is data, not corruption, and mapping it into an invented enum
+ * would destroy the only evidence of it. What must NOT happen is the state
+ * being silently invisible — before this change an unrecognised
+ * `plgmLgsState` produced `suspendFired: false` and nothing else, so a
+ * consumer saw a confident "not suspended" for a token nobody understands.
+ *
+ * Returns undefined only when the payload carries no object at all: a
+ * CGM-only account must not gain a phantom annotation.
+ */
+export function describeAutoMode(therapy: unknown): AutoModeSnapshot | undefined {
+  if (!therapy || typeof therapy !== 'object' || Array.isArray(therapy)) return undefined;
+  const state = therapy as { autoModeShieldState?: unknown; plgmLgsState?: unknown };
+
+  const shield = typeof state.autoModeShieldState === 'string' ? state.autoModeShieldState : undefined;
+  const plgm = typeof state.plgmLgsState === 'string' ? state.plgmLgsState : undefined;
+
+  // An object with neither field carries no state at all. Emitting
+  // `{suspendFired: null}` for it would be an annotation that says nothing
+  // about the pump, which is worse than no annotation — a consumer cannot tell
+  // it apart from a payload whose fields were stripped.
+  if (state.autoModeShieldState === undefined && state.plgmLgsState === undefined) {
+    return undefined;
+  }
+
+  const unrecognised: string[] = [];
+  // A field that is absent is not a mislabel; only a present-but-unknown token
+  // is. A non-string present value is likewise surfaced, coerced for the log.
+  if (state.autoModeShieldState !== undefined && shield === undefined) {
+    unrecognised.push(String(state.autoModeShieldState));
+  } else if (shield !== undefined && !AUTO_MODE_SHIELD_STATES.has(shield)) {
+    unrecognised.push(shield);
+  }
+  if (state.plgmLgsState !== undefined && plgm === undefined) {
+    unrecognised.push(String(state.plgmLgsState));
+  } else if (plgm !== undefined && !PLGM_LGS_STATES.has(plgm)) {
+    unrecognised.push(plgm);
+  }
+
+  if (unrecognised.length > 0) {
+    // Loud on purpose: the token set was never observed on the wire, so an
+    // unknown value is the one signal that the vocabulary is incomplete.
+    logger.warn(
+      'therapyAlgorithmState carries token(s) outside the recorded vocabulary: ' +
+        unrecognised.join(', ') +
+        ' — the raw value is passed through, not interpreted',
+      { autoModeState: state },
+    );
+  }
+
+  const snapshot: AutoModeSnapshot = {
+    suspendFired: plgm === undefined ? null : SUSPEND_FIRED_STATES.has(plgm) ? true
+      : PLGM_LGS_STATES.has(plgm) ? false : null,
+    recognised: unrecognised.length === 0,
+    unrecognisedStates: unrecognised,
+  };
+  if (shield !== undefined) snapshot.shieldState = shield;
+  else if (state.autoModeShieldState !== undefined) {
+    snapshot.shieldState = String(state.autoModeShieldState);
+  }
+  if (plgm !== undefined) snapshot.plgmState = plgm;
+  else if (state.plgmLgsState !== undefined) {
+    snapshot.plgmState = String(state.plgmLgsState);
+  }
+  return snapshot;
+}
+
+/**
+ * Reservoir in the units Nightscout's `pump.reservoir` is documented in.
+ *
+ * Units fields win over `reservoirLevelPercent` (#83): the percent is
+ * quantised to five snap-points (0/25/50/75/100 — research memo §P2.1) and the
+ * units are rounded, so they can disagree slightly, and downstream looping
+ * clients read the units value.
+ *
+ * A percent is NOT converted into units as a last resort. That conversion
+ * needs the reservoir's capacity, which is not in the payload and is not
+ * measured, so `25` would become an invented `75` (or `60`, or `100`) — a
+ * fabricated dose-supply figure in a medical field. Instead the percent is
+ * surfaced separately as `pump.reservoirPercent`, so a percent-only payload is
+ * visible rather than silently `undefined`. Research memo §P2.1 asks for
+ * exactly that field, and it is the honest half of the mapping: coarse beats
+ * absent, but only when labelled as coarse.
+ */
+function reservoirUnits(data: CareLinkData): number | undefined {
+  for (const v of [data.reservoirRemainingUnits, data.reservoirAmount]) {
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+  }
+  return undefined;
+}
+
+function reservoirPercent(data: CareLinkData): number | undefined {
+  const v = data.reservoirLevelPercent;
+  // 0..100 or nothing: a percent outside that range is malformed, and a
+  // negative percent would read as "more than full" downstream.
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) return undefined;
+  return v;
+}
+
 function deviceStatusEntry(
   data: CareLinkData,
   offset: string,
   offsetMilliseconds: number,
-): NightscoutDeviceStatus {
+): DeviceStatusWithDrift {
+  // Pump clock drift annotation (research memo P0.3). Present only when a
+  // device clock exists AND the drift is non-zero — see DeviceStatusWithDrift.
+  // `Math.abs` because a pump running 6 min fast and one running 6 min slow are
+  // equally worth an operator's attention, and the sign is already carried by
+  // the raw delta in the log line; the annotation is a magnitude alarm.
+  const clockReading = pumpClockReading(data);
+  const clockDrift =
+    clockReading && clockReading.driftMinutes !== 0
+      ? { clock_drift_minutes: Math.abs(clockReading.driftMinutes) }
+      : {};
   // Compute lastAlarm annotation + side-effect log once per transform call.
   // Both branches (GUARDIAN, pump) attach the same annotation. NEVER
   // publishes to /api/v1/treatments.json — see src/last-alarm.ts.
@@ -286,31 +456,17 @@ function deviceStatusEntry(
 
   // SmartGuard auto-mode state, read off `therapyAlgorithmState`. Emitted only
   // when the payload carries the object — a CGM-only account has no pump and
-  // must not gain a phantom annotation. Values are passed through verbatim:
-  // the recorded vocabularies are
-  //   autoModeShieldState : AUTO_BASAL | SAFE_BASAL | FEATURE_OFF
-  //   plgmLgsState        : FEATURE_OFF | REFRACTORY_PERIOD | MONITORING |
-  //                         SUSPEND_FIRED_PLGM | SUSPEND_FIRED_LGS
-  // but they were recovered from the vendor's own parser, never from a captured
-  // payload (carelink-api-research area DP §3), so an unrecorded value is a
-  // possibility and is surfaced rather than filtered out.
-  const therapy = data.therapyAlgorithmState;
-  const autoMode = therapy && typeof therapy === 'object'
-    ? {
-        shieldState: therapy.autoModeShieldState,
-        plgmState: therapy.plgmLgsState,
-        // A fired PLGM/LGS suspend means delivery has stopped. Exposed as a
-        // boolean so a consumer does not have to know the token set.
-        suspendFired:
-          therapy.plgmLgsState === 'SUSPEND_FIRED_PLGM' ||
-          therapy.plgmLgsState === 'SUSPEND_FIRED_LGS',
-      }
-    : undefined;
+  // must not gain a phantom annotation. See describeAutoMode() for why an
+  // unknown token is surfaced instead of translated.
+  const autoMode = describeAutoMode(data.therapyAlgorithmState);
 
   // Resolve once: on a BLE payload the family may arrive only as
   // `deviceFamily`, so reading `medicalDeviceFamily` directly would miss the
   // GUARDIAN branch as well as crash in deviceName(). Same fix, same reason.
   const family = deviceFamilyName(data);
+
+  // Computed once so `reservoir` and `reservoirPercent` cannot disagree.
+  const pct = reservoirPercent(data);
 
   // `created_at` must never be "now". v13 display/message sends no
   // `lastMedicalDeviceDataUpdateServerTime`, so fall back to the newest
@@ -327,6 +483,7 @@ function deviceStatusEntry(
         battery: deviceBatteryPercent(data),
       },
       last_alarm: lastAlarm,
+      ...clockDrift,
 
 
       connect: {
@@ -351,14 +508,19 @@ function deviceStatusEntry(
       battery: data.conduitBatteryLevel,
     },
     last_alarm: lastAlarm,
+    ...clockDrift,
 
 
     pump: {
       battery: { percent: deviceBatteryPercent(data) },
       // Units fields win over reservoirLevelPercent (#83): the percent is
       // quantised and the units are rounded, so they can disagree slightly,
-      // and downstream looping clients read the units value.
-      reservoir: data.reservoirRemainingUnits ?? data.reservoirAmount,
+      // and downstream looping clients read the units value. A percent-only
+      // payload keeps `reservoir` undefined — converting it would need the
+      // reservoir capacity, which is not in the payload — but the percent is
+      // published separately so the value is not silently lost.
+      reservoir: reservoirUnits(data),
+      ...(pct !== undefined ? { reservoirPercent: pct } : {}),
       iob: {
         timestamp: timestampAsString(deviceUpdateAt),
         bolusiob: data.activeInsulin?.amount != null && data.activeInsulin.amount >= 0

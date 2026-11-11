@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CUMULUS_V13_PATH_SUFFIX,
   DISCOVERY_APP_VERSION,
+  DISCOVERY_TAIL_TRACKS,
   PINNED_DISCOVERY_CERT_FINGERPRINT,
   VERIFIED_AUTH0_V13_FAMILY,
   VERIFIED_DISCOVERY_CERT_COUNT,
@@ -27,6 +28,99 @@ describe('DISCOVERY_APP_VERSION', () => {
   it('is not the no-Auth0 v3.4 / v4.0 tracks', () => {
     expect(DISCOVERY_APP_VERSION).not.toBe('android/3.4');
     expect(DISCOVERY_APP_VERSION).not.toBe('android/4.0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Why android/3.6 and not something else — the reasoning, asserted
+// ---------------------------------------------------------------------------
+//
+// Areas AH (2026-11-10) and AO (2026-11-11) re-derived the app-version axis and
+// returned a result that reads like it should move the pin: the
+// `Auth0SSOConfiguration` key is present on 3.5/3.7/3.8 as well as 3.6, so the
+// "no Auth0 key" half of the failure mode does not protect those tails.
+//
+// It still does not move the pin, and the tests below pin WHY rather than
+// leaving the argument in a comment where the next contributor can't run it:
+//
+//   - 3.7/3.8 are the SAME document as 3.6 (one tail-erased digest), so a bump
+//     is a no-op: identical bytes under a different request string.
+//   - 3.5 carries the Auth0 key but sits on cumulus v11, caught only by the
+//     track gate (covered in test/login-errors.test.ts).
+//   - 3.9/3.10/4.x have no Auth0 key at all — they serve the fallback document.
+//
+// The single load-bearing consequence for the PIN is that the family
+// (Auth0 AND cumulus v13) is exactly {3.6, 3.7, 3.8} and 3.6 is the member with
+// the widest verified coverage, so it stays index 0.
+describe('the pin\'s reasoning (areas AH + AO)', () => {
+  function row(tail: string) {
+    const found = DISCOVERY_TAIL_TRACKS.find(r => r.tail === tail);
+    expect(found, `no recorded row for ${tail}`).toBeDefined();
+    return found!;
+  }
+
+  it('records every tail the research actually measured, and no invented ones', () => {
+    // 3.4 (AH), 3.5/3.7/3.8/3.9/3.10/3.6-control (AO), 4.0 (AH). If someone adds
+    // a row for an unprobed tail they must also add the evidence — this asserts
+    // the membership so an addition is a deliberate, reviewable change.
+    expect(DISCOVERY_TAIL_TRACKS.map(r => r.tail)).toEqual([
+      'android/3.4',
+      'android/3.5',
+      'android/3.6',
+      'android/3.7',
+      'android/3.8',
+      'android/3.9',
+      'android/3.10',
+      'android/4.0',
+    ]);
+  });
+
+  it('the pinned version is the only Auth0+v13 member that is also index 0 of the family', () => {
+    expect(DISCOVERY_APP_VERSION).toBe(VERIFIED_AUTH0_V13_FAMILY[0]);
+  });
+
+  it('every family member is recorded as Auth0-present on cumulus v13', () => {
+    for (const tail of VERIFIED_AUTH0_V13_FAMILY) {
+      const r = row(tail);
+      expect(r.cumulus, `${tail} cumulus`).toBe('v13');
+      expect(r.auth0Key, `${tail} auth0Key`).toBe(true);
+      expect(r.documentClass, `${tail} documentClass`).toBe('current');
+    }
+  });
+
+  it('a 3.7 or 3.8 bump would fetch the SAME document — no-op, not an improvement', () => {
+    // This is the whole reason the pin does not move despite AO widening the
+    // Auth0-key band. If a probe ever shows 3.7/3.8 diverging from the 3.6
+    // document class, this assertion is what should go red first.
+    const pinnedClass = row('android/3.6').documentClass;
+    for (const tail of ['android/3.7', 'android/3.8']) {
+      expect(row(tail).documentClass, `${tail} belongs to the 3.6 document`).toBe(pinnedClass);
+    }
+  });
+
+  it('3.5 is Auth0-present but off-track, so key presence alone cannot guard it', () => {
+    // AO's headline. The pin guard must therefore be the cumulus-track gate —
+    // see the matching case in test/login-errors.test.ts. If this row ever says
+    // v13, the #75 rationale in src/login-errors.ts needs re-reading.
+    const r = row('android/3.5');
+    expect(r.auth0Key).toBe(true);
+    expect(r.cumulus).toBe('v11');
+    expect(r.cumulus).not.toBe('v13');
+  });
+
+  it('3.9 and 3.10 are the fallback document with no Auth0 key at all', () => {
+    for (const tail of ['android/3.9', 'android/3.10']) {
+      expect(row(tail).auth0Key, `${tail} carries no Auth0 key`).toBe(false);
+      expect(row(tail).documentClass, `${tail} is the fallback`).toBe('fallback');
+    }
+  });
+
+  it('a non-version tail and 4.x are indistinguishable — the axis is a keyed table', () => {
+    // AE's finding (§3b.6 of docs/03): the sequence L L C L C L L across the
+    // interior tails cannot come from any monotone threshold. Practically: 4.0
+    // being "v2" says nothing about version 4.0, only that it is unkeyed.
+    expect(row('android/4.0').documentClass).toBe(row('android/3.9').documentClass);
+    expect(row('android/4.0').cumulus).toBe(row('android/3.9').cumulus);
   });
 });
 

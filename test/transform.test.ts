@@ -311,4 +311,137 @@ describe('transform()', () => {
       expect(result.entries[0].sgv).toBe(120);
     });
   });
- });
+
+  describe('reservoirLevelPercent fallback (#83, memo §P2.1)', () => {
+    it('publishes the percent when no units field is present', () => {
+      // A percent-only payload used to yield `reservoir: undefined` with
+      // nothing else — a silently missing value for a supplies figure.
+      const ds = transform(data({
+        reservoirAmount: undefined,
+        reservoirRemainingUnits: undefined,
+        reservoirLevelPercent: 25,
+      })).devicestatus[0];
+      expect(ds.pump?.reservoir).toBeUndefined();
+      expect(ds.pump?.reservoirPercent).toBe(25);
+    });
+
+    it('does NOT invent units from a percent — capacity is not in the payload', () => {
+      // Turning 25% into a units figure needs the reservoir capacity, which is
+      // unmeasured here. A fabricated number in a dose-supply field is worse
+      // than an absent one.
+      const ds = transform(data({ reservoirAmount: undefined, reservoirLevelPercent: 100 }))
+        .devicestatus[0];
+      expect(ds.pump?.reservoir).toBeUndefined();
+    });
+
+    it('publishes both values when both are present, and says so', () => {
+      const ds = transform(data({ reservoirAmount: 40, reservoirLevelPercent: 50 })).devicestatus[0];
+      expect(ds.pump?.reservoir).toBe(40);
+      expect(ds.pump?.reservoirPercent).toBe(50);
+    });
+
+    it('omits the percent entirely when it is absent or malformed', () => {
+      expect(transform(data({ reservoirAmount: 40 })).devicestatus[0].pump?.reservoirPercent)
+        .toBeUndefined();
+      for (const bad of [-5, 101, Number.NaN, Infinity]) {
+        const ds = transform(data({ reservoirAmount: 40, reservoirLevelPercent: bad }))
+          .devicestatus[0];
+        expect(ds.pump?.reservoirPercent).toBeUndefined();
+      }
+    });
+  });
+
+  describe('SmartGuard therapyAlgorithmState (area DP §3)', () => {
+    it('emits no autoMode when the payload carries no state object', () => {
+      // A CGM-only account has no pump and must not gain a phantom annotation.
+      const ds = transform(data({ therapyAlgorithmState: undefined })).devicestatus[0];
+      expect(ds.pump?.autoMode).toBeUndefined();
+    });
+
+    it('emits no autoMode for an EMPTY state object', () => {
+      // An object with neither field says nothing about the pump; emitting
+      // `{suspendFired: null}` would be an annotation with no information.
+      const ds = transform(data({ therapyAlgorithmState: {} })).devicestatus[0];
+      expect(ds.pump?.autoMode).toBeUndefined();
+    });
+
+    it('reports both recorded vocabularies verbatim', () => {
+      const ds = transform(data({
+        therapyAlgorithmState: { autoModeShieldState: 'AUTO_BASAL', plgmLgsState: 'MONITORING' },
+      })).devicestatus[0];
+      expect(ds.pump?.autoMode).toMatchObject({
+        shieldState: 'AUTO_BASAL',
+        plgmState: 'MONITORING',
+        suspendFired: false,
+        recognised: true,
+        unrecognisedStates: [],
+      });
+    });
+
+    it('sets suspendFired for both fired tokens', () => {
+      for (const token of ['SUSPEND_FIRED_PLGM', 'SUSPEND_FIRED_LGS']) {
+        const ds = transform(data({ therapyAlgorithmState: { plgmLgsState: token } }))
+          .devicestatus[0];
+        expect(ds.pump?.autoMode?.suspendFired).toBe(true);
+      }
+    });
+
+    it('never reports suspendFired:false for an UNKNOWN token', () => {
+      // The bug this guards: `suspendFired` was a bare string comparison, so
+      // any token outside the recorded set — including a new suspend state —
+      // read as "delivery is running", which is the dangerous direction.
+      const ds = transform(data({
+        therapyAlgorithmState: { plgmLgsState: 'SUSPEND_FIRED_XYZ' },
+      })).devicestatus[0];
+      expect(ds.pump?.autoMode?.suspendFired).toBeNull();
+      expect(ds.pump?.autoMode?.suspendFired).not.toBe(false);
+    });
+
+    it('surfaces an unknown token instead of dropping it', () => {
+      const ds = transform(data({
+        therapyAlgorithmState: { autoModeShieldState: 'AUTO_BASAL', plgmLgsState: 'BRAND_NEW' },
+      })).devicestatus[0];
+      expect(ds.pump?.autoMode).toMatchObject({
+        plgmState: 'BRAND_NEW',
+        recognised: false,
+        unrecognisedStates: ['BRAND_NEW'],
+      });
+    });
+
+    it('surfaces a non-string state value rather than ignoring it', () => {
+      const ds = transform(data({
+        therapyAlgorithmState: { autoModeShieldState: 7 } as unknown as
+          import('../src/types/carelink.js').CareLinkTherapyAlgorithmState,
+      }))
+        .devicestatus[0];
+      expect(ds.pump?.autoMode).toMatchObject({
+        shieldState: '7',
+        recognised: false,
+        unrecognisedStates: ['7'],
+      });
+    });
+
+    it('accepts every token in the recorded vocabularies', () => {
+      const shields = ['AUTO_BASAL', 'SAFE_BASAL', 'FEATURE_OFF'];
+      const plgms = [
+        'FEATURE_OFF', 'REFRACTORY_PERIOD', 'MONITORING',
+        'SUSPEND_FIRED_PLGM', 'SUSPEND_FIRED_LGS',
+      ];
+      for (const s of shields) {
+        expect(transform(data({ therapyAlgorithmState: { autoModeShieldState: s } }))
+          .devicestatus[0].pump?.autoMode?.recognised).toBe(true);
+      }
+      for (const p of plgms) {
+        expect(transform(data({ therapyAlgorithmState: { plgmLgsState: p } }))
+          .devicestatus[0].pump?.autoMode?.recognised).toBe(true);
+      }
+    });
+
+    it('leaves suspendFired null when plgmLgsState is absent', () => {
+      const ds = transform(data({ therapyAlgorithmState: { autoModeShieldState: 'SAFE_BASAL' } }))
+        .devicestatus[0];
+      expect(ds.pump?.autoMode?.suspendFired).toBeNull();
+      expect(ds.pump?.autoMode?.plgmState).toBeUndefined();
+    });
+  });
+});
