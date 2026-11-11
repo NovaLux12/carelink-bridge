@@ -12,7 +12,7 @@ import type { CareLinkMarker } from '../types/carelink.js';
  * (carelink-api-research findings-log/medtronic-carelink-2026-07-21 §P1.1).
  *
  * THE WIRE SHAPE (OBSERVED, carelink-api-research area S4 §5.1). A marker
- * carries `index` (an integer slot, NOT a timestamp), `type`, `value`, and
+ * carries `index` (an INTEGER slot, NOT a timestamp), `type`, `value`, and
  * optionally `deliverySuspended`. The timestamp is derived:
  *
  *     t = anchor − (287 − index) × 300_000 ms
@@ -20,7 +20,7 @@ import type { CareLinkMarker } from '../types/carelink.js';
  * where `anchor` is the newest datapoint's time and 300 s is CareLink's slot
  * width. So a marker's time is only expressible relative to an anchor — a
  * marker array with no anchor cannot be dated, and this module refuses to
- * guess (see `resolveMarkers`).
+ * guess (see `markerTime`).
  *
  * WHAT IS DELIBERATELY NOT MAPPED. `AUTO_BASAL_DELIVERY` and
  * `AUTO_MODE_STATUS` are declared in the 11-token vocabulary but are never
@@ -32,10 +32,23 @@ import type { CareLinkMarker } from '../types/carelink.js';
  * silently lost.
  */
 
-/** Marker types the vendor's own client acts on, mapped to a Nightscout event. */
+/**
+ * Marker types the vendor's own client acts on, mapped to a Nightscout event.
+ *
+ * The glucose spellings are not redundant: the vendor's client branches on
+ * `connectType` and matches the literal `BG_READING` on the BLE (NGP) path but
+ * the enum `BG` on the non-BLE path, so a consumer switching on one alone
+ * drops every marker from the other family (area S4 §5.3, "the two
+ * vocabularies diverge").
+ *
+ * `'BG READING'` (with a space) is a third spelling documented in
+ * `findings-log/medtronic-carelink-2026-07-21/03-data-model-and-gaps.md` §P1.1
+ * for paradigm-era payloads, and is the spelling the 2015 sample actually
+ * carries. All three mean one thing — a fingerstick — so they share a branch.
+ */
 const MEAL_TYPES = new Set(['MEAL']);
 const INSULIN_TYPES = new Set(['INSULIN']);
-const BG_TYPES = new Set(['BG_READING', 'BG', 'CALIBRATION']);
+const BG_TYPES = new Set(['BG_READING', 'BG', 'BG READING', 'CALIBRATION']);
 
 /** CareLink's slot width: 287 slots of 5 minutes ≈ 24 h. */
 export const MARKER_SLOT_MS = 300_000;
@@ -49,9 +62,15 @@ export const MARKER_LAST_SLOT = 287;
  * would silently move a marker into the future, which is the exact defect that
  * produced future-dated readings in another client (research repo `docs/10`,
  * timestamp semantics row).
+ *
+ * A non-integer index is rejected too. The slot is an integer by definition
+ * (area S4 §5.1), so `280.5` is not a coarser time — it is a malformed slot,
+ * and honouring it would mint a timestamp at :27:30 that corresponds to no
+ * CareLink slot and can never be reconciled with the pump's own log.
  */
 export function markerTime(index: unknown, anchorMs: number): number | null {
   if (typeof index !== 'number' || !Number.isFinite(index)) return null;
+  if (!Number.isInteger(index)) return null;
   if (index < 0 || index > MARKER_LAST_SLOT) return null;
   if (!Number.isFinite(anchorMs)) return null;
   return anchorMs - (MARKER_LAST_SLOT - index) * MARKER_SLOT_MS;
@@ -88,8 +107,37 @@ export function treatmentId(
   return `carelink-marker-${digest.slice(0, 24)}`;
 }
 
+/**
+ * Read a numeric field that may arrive as a number or a numeric string.
+ *
+ * The wire is documented as numeric (`value` is "numeric, clamped by the
+ * consumer", area S4 §5.1), but a stringified number is a lossless variant and
+ * refusing it silently deleted the carbs off a meal. Measured before this
+ * change: `{type:'MEAL', amount:'45'}` emitted a `Carb Correction` with NO
+ * `carbs` field at all — an event that says a meal happened and not how big.
+ *
+ * Negative values are rejected, not clamped. The corpus records `-1` as a
+ * sentinel on `activeInsulin.amount` ("no IOB", `field-census.json`), so a
+ * negative amount is a flag rather than a dose, and a negative insulin or carb
+ * value is physically impossible. Writing `insulin: -3` would subtract from a
+ * dosing record; dropping the event and counting it is the honest direction.
+ */
 function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  let n: number | undefined;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && v.trim() !== '') n = Number(v);
+  if (n === undefined || !Number.isFinite(n)) return undefined;
+  if (n < 0) return undefined;
+  return n;
+}
+
+/** Why a value was unusable, for the `unmapped` census. */
+function amountProblem(v: unknown): 'no amount' | 'negative amount' | undefined {
+  if (num(v) !== undefined) return undefined;
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) && n < 0
+    ? 'negative amount'
+    : 'no amount';
 }
 
 /** Trim to 3dp without float noise — insulin values are reported to 0.05 U. */
@@ -122,7 +170,16 @@ export function mapMarkers(
   markers: unknown,
   anchorMs: number,
 ): MarkerMappingResult {
-  const out: MarkerMappingResult = { treatments: [], unmapped: {}, undatable: 0 };
+  const out: MarkerMappingResult = {
+    treatments: [],
+    // Null prototype on purpose. This object is keyed by WIRE-SUPPLIED text, so
+    // with a plain `{}` a marker whose type is `constructor` or `toString`
+    // resolved to an inherited function and the count became the string
+    // "function Object() { [native code] }1", while `__proto__` was silently
+    // discarded (measured). A census that corrupts itself is worse than none.
+    unmapped: Object.create(null) as Record<string, number>,
+    undatable: 0,
+  };
   if (!Array.isArray(markers) || markers.length === 0) return out;
   if (!Number.isFinite(anchorMs)) {
     // Every marker in the array is undatable; report the population rather than
@@ -130,6 +187,10 @@ export function mapMarkers(
     out.undatable = markers.length;
     return out;
   }
+
+  const countUnmapped = (key: string): void => {
+    out.unmapped[key] = (out.unmapped[key] ?? 0) + 1;
+  };
 
   // A Map here silently LOST insulin: two INSULIN markers sharing an index
   // overwrote one another, so 3 U + 4 U was recorded as 4 U. Under-counting
@@ -140,16 +201,38 @@ export function mapMarkers(
   const meals: CareLinkMarker[] = [];
   const others: CareLinkMarker[] = [];
 
+  const MAPPER_TYPES = new Set([...MEAL_TYPES, ...INSULIN_TYPES, ...BG_TYPES]);
+
   for (const raw of markers) {
-    if (!raw || typeof raw !== 'object') continue;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      // A non-object entry cannot be classified at all. Count it rather than
+      // skipping in silence — the caller's log is the only way an operator
+      // learns the array carried something unexpected.
+      countUnmapped('(not an object)');
+      continue;
+    }
     const m = raw as CareLinkMarker;
     const t = m.type;
-    if (typeof t !== 'string') continue;
-    if (typeof m.index === 'number' && INSULIN_TYPES.has(t)) {
+    if (typeof t !== 'string') {
+      // No `type` means no dispatch is possible; measured before this change,
+      // `{index: 280, amount: 45}` produced an EMPTY result with an empty
+      // census, i.e. a dropped meal that nothing reported.
+      countUnmapped(t === undefined ? '(no type)' : '(non-string type)');
+      continue;
+    }
+    if (typeof m.index !== 'number') {
+      // A mappable type with no usable slot is UNDATABLE, not an unmapped
+      // type. Reporting it as `unmapped['MEAL']` would blame the vocabulary
+      // for a missing field and point an operator at the wrong thing.
+      if (MAPPER_TYPES.has(t)) { out.undatable++; continue; }
+      countUnmapped(t);
+      continue;
+    }
+    if (INSULIN_TYPES.has(t)) {
       const bucket = insulinByIndex.get(m.index);
       if (bucket) bucket.push(m);
       else insulinByIndex.set(m.index, [m]);
-    } else if (typeof m.index === 'number' && MEAL_TYPES.has(t)) {
+    } else if (MEAL_TYPES.has(t)) {
       meals.push(m);
     } else {
       others.push(m);
@@ -160,9 +243,26 @@ export function mapMarkers(
   // insulin) tuple has already been emitted. Keeps identical markers distinct.
   const seen = new Map<string, number>();
 
-  const emit = (m: CareLinkMarker, eventType: string, carbs?: number, insulin?: number) => {
+  /**
+   * Emit one treatment, or `null` when the marker cannot be dated.
+   *
+   * RETURNING the treatment rather than letting callers index back into
+   * `out.treatments` is the fix for a mis-attribution bug: the BG branch used
+   * to write `glucose` onto `out.treatments[length - 1]`, and when the BG
+   * marker was undatable `emit` returned early, so the glucose landed on
+   * whatever had been pushed BEFORE it. Measured: a fingerstick at index 400
+   * stamped `glucose: 118, glucoseType: 'Finger'` onto an unrelated
+   * `Meal Bolus` at index 280 — corrupting a different event's permanent
+   * record. A null return makes that state unrepresentable.
+   */
+  const emit = (
+    m: CareLinkMarker,
+    eventType: string,
+    carbs?: number,
+    insulin?: number,
+  ): Record<string, unknown> | null => {
     const created = markerTime(m.index, anchorMs);
-    if (created === null) { out.undatable++; return; }
+    if (created === null) { out.undatable++; return null; }
     const key = `${created}|${eventType}|${carbs ?? ''}|${insulin ?? ''}`;
     const occurrence = seen.get(key) ?? 0;
     seen.set(key, occurrence + 1);
@@ -176,23 +276,57 @@ export function mapMarkers(
     if (carbs !== undefined) t.carbs = carbs;
     if (insulin !== undefined) t.insulin = insulin;
     out.treatments.push(t);
+    return t;
+  };
+
+  /**
+   * Take the bolus that best represents what the pump was told for this meal.
+   *
+   * A zero-amount INSULIN marker is a real marker (a prime, or a bolus the user
+   * cancelled) but it is not a dose. Measured before this change: a meal
+   * followed by `0 U` then `4 U` paired with the zero, so Nightscout recorded
+   * a 45 g meal bolused 0 U while the actual 4 U appeared as an unrelated
+   * correction. Only a POSITIVE bolus is eligible to pair; zero-amount markers
+   * stay in the bucket and are reported by the leftover pass.
+   */
+  const takeBolus = (bucket: CareLinkMarker[] | undefined): CareLinkMarker | undefined => {
+    if (!bucket || bucket.length === 0) return undefined;
+    const i = bucket.findIndex((b) => {
+      const v = num(b.amount) ?? num(b.value);
+      return v !== undefined && v > 0;
+    });
+    return i < 0 ? undefined : bucket.splice(i, 1)[0];
   };
 
   for (const meal of meals) {
-    const bucket = insulinByIndex.get(meal.index as number);
-    // Consume exactly ONE bolus per meal. A meal split across two markers, or a
-    // second bolus at the same slot, must not be absorbed into the first.
-    const bolus = bucket && bucket.length > 0 ? bucket.shift() : undefined;
+    const datable = markerTime(meal.index, anchorMs) !== null;
+    // Only consume a bolus for a meal that actually reaches the output.
+    // Otherwise an undatable meal swallowed a datable bolus and the insulin
+    // vanished with no count anywhere.
+    const bolus = datable ? takeBolus(insulinByIndex.get(meal.index as number)) : undefined;
     // `amount` is carbs on a MEAL and units on an INSULIN; the vendor's own
     // mapping reads them from the same field name (`docs` §P1.1).
     const carbs = num(meal.amount) ?? num(meal.value);
     const insulin = bolus ? num(bolus.amount) ?? num(bolus.value) : undefined;
+
+    if (carbs === undefined && insulin === undefined) {
+      // A meal with neither carbs nor a bolus would become a treatment that
+      // asserts a meal happened while carrying no information about it. Count
+      // it instead of writing an empty event.
+      countUnmapped(`MEAL(${amountProblem(meal.amount ?? meal.value) ?? 'no amount'})`);
+      continue;
+    }
     if (bolus) {
-      emit(meal, 'Meal Bolus', carbs === undefined ? undefined : round(carbs),
+      // A paired 0 g meal is a bolus with no carbs; writing `carbs: 0` would
+      // assert a carb entry that does not exist.
+      emit(meal, 'Meal Bolus', carbs === undefined || carbs === 0 ? undefined : round(carbs),
            insulin === undefined ? undefined : round(insulin));
-    } else {
+    } else if (carbs !== undefined && carbs > 0) {
       // A meal with no bolus still happened; record the carbs.
-      emit(meal, 'Carb Correction', carbs === undefined ? undefined : round(carbs), undefined);
+      emit(meal, 'Carb Correction', round(carbs));
+    } else {
+      // 0 g of carbs corrects nothing and asserts nothing: an empty event.
+      countUnmapped('MEAL(zero amount)');
     }
   }
 
@@ -200,9 +334,18 @@ export function mapMarkers(
   // the output is deterministic regardless of the wire order.
   for (const idx of [...insulinByIndex.keys()].sort((a, b) => a - b)) {
     for (const bolus of insulinByIndex.get(idx) ?? []) {
-      const insulin = num(bolus.amount) ?? num(bolus.value);
-      if (insulin === undefined) { out.unmapped['INSULIN(no amount)'] =
-        (out.unmapped['INSULIN(no amount)'] ?? 0) + 1; continue; }
+      const raw = bolus.amount ?? bolus.value;
+      const insulin = num(raw);
+      if (insulin === undefined) {
+        countUnmapped(`INSULIN(${amountProblem(raw) ?? 'no amount'})`);
+        continue;
+      }
+      if (insulin === 0) {
+        // "0 U delivered" is not an event Nightscout should hold as a bolus;
+        // it is a marker with no dose. Reported, not emitted.
+        countUnmapped('INSULIN(zero amount)');
+        continue;
+      }
       emit(bolus, 'Correction Bolus', undefined, round(insulin));
     }
   }
@@ -211,16 +354,23 @@ export function mapMarkers(
     const t = String(m.type);
     if (BG_TYPES.has(t)) {
       const glucose = num(m.value) ?? num(m.amount);
-      if (glucose === undefined) { out.unmapped[`${t}(no value)`] =
-        (out.unmapped[`${t}(no value)`] ?? 0) + 1; continue; }
-      emit(m, 'BG Check', undefined, undefined);
-      const last = out.treatments[out.treatments.length - 1];
-      if (last) { last.glucose = round(glucose); last.glucoseType = 'Finger'; }
+      if (glucose === undefined) {
+        countUnmapped(`${t}(${amountProblem(m.value ?? m.amount) ?? 'no value'})`);
+        continue;
+      }
+      // Attach the glucose to the treatment emit() RETURNED — never to
+      // `out.treatments[out.treatments.length - 1]`, which is the previous
+      // event whenever this marker could not be dated.
+      const treatment = emit(m, 'BG Check');
+      if (treatment) {
+        treatment.glucose = round(glucose);
+        treatment.glucoseType = 'Finger';
+      }
       continue;
     }
     // Declared in the vocabulary but never handled by the vendor either. Count
     // them so their existence is visible rather than silently swallowed.
-    out.unmapped[t] = (out.unmapped[t] ?? 0) + 1;
+    countUnmapped(t);
   }
 
   return out;

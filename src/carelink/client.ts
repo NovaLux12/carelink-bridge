@@ -11,6 +11,7 @@ import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import { cumulusBaseUrlFrom, fetchDisplayMessage } from './cumulus.js';
 import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
 import { logPayloadCensus } from '../payload-census.js';
+import { assertUserInfoShape } from '../login-errors.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -212,7 +213,16 @@ export class CareLinkClient {
 
   private async getConnectData(): Promise<CareLinkData> {
     const resp = await this.axiosInstance.get<CareLinkUserInfo>(this.urls.me);
-    this.currentUser = resp.data;
+    // A 200 that is not a user record is a real failure mode, not a payload:
+    // the official app reads identity from /api/carepartner/v2, so a token that
+    // cannot read /patient/users/me may still answer 200 with an HTML page or a
+    // JSON error envelope. Without this guard the empty role fell through the
+    // legacy chain and the fetch "succeeded" with `{}` — a silent zero-data
+    // upload (see UnexpectedUserInfoError in src/login-errors.ts).
+    this.currentUser = assertUserInfoShape(resp.data, {
+      url: this.urls.me,
+      region: this.serverName,
+    }) as unknown as CareLinkUserInfo;
     const role = resp.data?.role?.toUpperCase() ?? '';
     logger.log('getConnectData - currentRole:', role);
     if (this.currentUser?.username && this.currentUser.username !== this.options.username) {
@@ -955,10 +965,36 @@ export function isBleDevice(deviceFamily?: string, deviceModel?: string): boolea
  * loop and the correct backend is never reached. That is why v13 leads and the
  * config's own version is tried later rather than first.
  *
- * v5 is dropped: `/connect/carepartner/v5/display/message` has no route at all
- * (not auth-gated), so it can only ever cost a request. Exported for tests.
+ * Membership, with the evidence for each, because a fallback list is a claim
+ * about which routes exist:
+ *
+ *  - **13** — the route the current app uses; live on all three hosts (200 on
+ *    discovery, and the endpoint this bridge's primary path calls).
+ *  - **12** — **live and token-gated**: `GET v12/display/message` answers
+ *    `401 UnauthorizedException` + `x-ca-err: 990` on `clcloud.minimed.eu`,
+ *    `.com` and `-trials` (0 of 3 hosts missing), and its `OPTIONS` returns
+ *    `200` with `access-control-allow-origin: *` exactly like v11 and v13
+ *    [source: findings-log/2026-10-12-area-b-v12-routing/FINDINGS.md §Finding
+ *    1–2; pinned in regression/hurl/04-deep-surface.hurl]. Added because the
+ *    live GET set is `{11, 12, 13}` and this list used to omit 12
+ *    [source: docs/03 §6]. ⚠ What is NOT established: that v12 *serves data*
+ *    for any account. It is a candidate — one request on a path already
+ *    reached only when v13 failed — not a verified backend, which is exactly
+ *    the same standing v11 has here.
+ *  - **11** — live, token-gated, and the version the trials-tenant discovery
+ *    document advertises; kept as a candidate for the same reason.
+ *  - **6** — **POST-only**, not dead: `GET v6/display/message` is 403 but
+ *    `OPTIONS` answers 200 with CORS on all three hosts, i.e. a route
+ *    registered without a GET method. This bridge **POSTs**, so v6 is a real
+ *    target; it is last because it is the version the config hands out and the
+ *    one that can answer with stale data.
+ *  - **5** — dropped, and must not come back: `/connect/carepartner/v5/...`
+ *    returns 403 at the router's no-route body (not an auth gate), so it can
+ *    only ever cost a request [source: docs/03 §6].
+ *
+ * Exported for tests.
  */
-const BLE_API_VERSIONS = [13, 11, 6] as const;
+const BLE_API_VERSIONS = [13, 12, 11, 6] as const;
 
 export function buildEndpointCandidates(url: string): string[] {
   if (!/\/v\d+\//.test(url)) return [url];

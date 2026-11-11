@@ -290,4 +290,260 @@ describe('mapMarkers', () => {
     expect(a).toEqual(b);
     expect(new Set(a).size).toBe(2);
   });
+
+  describe('malformed markers', () => {
+    it('dates nothing for a non-integer index and reports it', () => {
+      // 280.5 is not a coarser slot — it is a malformed one. Honouring it
+      // produced a timestamp at :27:30 that matches no CareLink slot.
+      const res = mapMarkers([{ index: 280.5, type: 'MEAL', amount: 45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.undatable).toBe(1);
+    });
+
+    it('reports a mappable type with no index as undatable, not as an unmapped type', () => {
+      // Blaming the vocabulary for a missing field sends an operator looking
+      // at the wrong thing: MEAL is a perfectly well-known type.
+      const res = mapMarkers([{ type: 'MEAL', amount: 45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.undatable).toBe(1);
+      expect(res.unmapped).toEqual({});
+    });
+
+    it('reports a string index rather than silently ignoring the marker', () => {
+      const res = mapMarkers([{ index: '280', type: 'MEAL', amount: 45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.undatable).toBe(1);
+    });
+
+    it('counts a marker with no type instead of returning an empty census', () => {
+      // Previously `{index: 280, amount: 45}` produced no treatments AND an
+      // empty `unmapped`, so a dropped meal was completely unobservable.
+      const res = mapMarkers([{ index: 280, amount: 45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ '(no type)': 1 });
+    });
+
+    it('counts a non-string type', () => {
+      const res = mapMarkers([{ index: 280, type: 7, amount: 45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ '(non-string type)': 1 });
+    });
+
+    it('counts a non-object array entry', () => {
+      const res = mapMarkers([null, 42, 'marker', []], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ '(not an object)': 4 });
+    });
+
+    it('does not corrupt the census when a marker type is a prototype name', () => {
+      // Keying the census on a plain `{}` meant `constructor` resolved to
+      // Object's own function and the count became the string
+      // "function Object() { [native code] }1", while `__proto__` was dropped.
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'constructor' },
+          { index: 281, type: 'toString' },
+          { index: 282, type: '__proto__' },
+          { index: 283, type: 'hasOwnProperty' },
+        ],
+        ANCHOR,
+      );
+      expect(res.treatments).toEqual([]);
+      // Built with Object.fromEntries on purpose: `__proto__: 1` inside an
+      // object LITERAL sets the prototype instead of creating a key, so a
+      // literal expectation would silently compare against three keys.
+      expect(res.unmapped).toEqual(Object.fromEntries([
+        ['constructor', 1], ['toString', 1], ['__proto__', 1], ['hasOwnProperty', 1],
+      ]));
+      expect(Object.getPrototypeOf(res.unmapped)).toBeNull();
+      expect(typeof res.unmapped['constructor']).toBe('number');
+    });
+
+    it('accepts a numeric string amount instead of dropping the value', () => {
+      // The wire is documented numeric, but a stringified number is a lossless
+      // variant. Previously this emitted a Carb Correction with NO carbs.
+      const res = mapMarkers([{ index: 280, type: 'MEAL', amount: '45' }], ANCHOR);
+      expect(res.treatments).toHaveLength(1);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'Carb Correction', carbs: 45 });
+    });
+
+    it('accepts a numeric string on both halves of a paired event', () => {
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'MEAL', amount: '45' },
+          { index: 280, type: 'INSULIN', amount: '6.5' },
+        ],
+        ANCHOR,
+      );
+      expect(res.treatments[0]).toMatchObject({ eventType: 'Meal Bolus', carbs: 45, insulin: 6.5 });
+    });
+
+    it('refuses a NEGATIVE insulin amount rather than subtracting from the record', () => {
+      // A negative dose is physically impossible; `-1` is a sentinel elsewhere
+      // in this payload (activeInsulin "no IOB"). Writing insulin: -3 would
+      // reduce a dosing total.
+      const res = mapMarkers([{ index: 280, type: 'INSULIN', amount: -3 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ 'INSULIN(negative amount)': 1 });
+    });
+
+    it('refuses a negative carb amount', () => {
+      const res = mapMarkers([{ index: 280, type: 'MEAL', amount: -45 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ 'MEAL(negative amount)': 1 });
+    });
+
+    it('treats NaN and Infinity amounts as absent, and counts them', () => {
+      const nan = mapMarkers([{ index: 280, type: 'INSULIN', amount: Number.NaN }], ANCHOR);
+      expect(nan.treatments).toEqual([]);
+      expect(nan.unmapped).toEqual({ 'INSULIN(no amount)': 1 });
+      const inf = mapMarkers([{ index: 280, type: 'MEAL', amount: Infinity }], ANCHOR);
+      expect(inf.treatments).toEqual([]);
+      expect(inf.unmapped).toEqual({ 'MEAL(no amount)': 1 });
+    });
+
+    it('does not write a treatment for a meal with no carbs and no bolus', () => {
+      const res = mapMarkers([{ index: 280, type: 'MEAL' }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ 'MEAL(no amount)': 1 });
+    });
+
+    it('maps a MEAL at an index where a zero-amount INSULIN sits, keeping the carbs', () => {
+      // A cancelled/prime bolus does not consume the meal's carbs.
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'MEAL', amount: 45 },
+          { index: 280, type: 'INSULIN', amount: 0 },
+        ],
+        ANCHOR,
+      );
+      expect(res.treatments).toHaveLength(1);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'Carb Correction', carbs: 45 });
+      expect(res.unmapped).toEqual({ 'INSULIN(zero amount)': 1 });
+    });
+
+    it('pairs the REAL bolus when a zero-amount one arrives first at the same index', () => {
+      // Measured before the fix: the 0 U marker was consumed by the meal, so
+      // the record said "45 g, 0 U" and the actual 4 U became a correction.
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'MEAL', amount: 45 },
+          { index: 280, type: 'INSULIN', amount: 0 },
+          { index: 280, type: 'INSULIN', amount: 4 },
+        ],
+        ANCHOR,
+      );
+      const meals = res.treatments.filter((t) => t.eventType === 'Meal Bolus');
+      expect(meals).toHaveLength(1);
+      expect(meals[0]).toMatchObject({ carbs: 45, insulin: 4 });
+      expect(res.treatments.filter((t) => t.eventType === 'Correction Bolus')).toHaveLength(0);
+    });
+
+    it('drops a lone zero-amount bolus without inventing a 0 U event', () => {
+      const res = mapMarkers([{ index: 280, type: 'INSULIN', amount: 0 }], ANCHOR);
+      expect(res.treatments).toEqual([]);
+      expect(res.unmapped).toEqual({ 'INSULIN(zero amount)': 1 });
+    });
+
+    it('keeps a MEAL and a BG reading that share one index as two events', () => {
+      // Types beyond meal/bolus still share the slot; neither may overwrite.
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'MEAL', amount: 45 },
+          { index: 280, type: 'BG_READING', value: 118 },
+        ],
+        ANCHOR,
+      );
+      expect(res.treatments).toHaveLength(2);
+      expect(res.treatments.map((t) => t.eventType).sort())
+        .toEqual(['BG Check', 'Carb Correction']);
+    });
+
+    it('maps the "BG READING" spelling used by paradigm-era payloads', () => {
+      // Area S4 §5.3 covers BG_READING vs BG; the 2015 memo §P1.1 records the
+      // spaced spelling too, and it was previously counted as unmapped.
+      const res = mapMarkers([{ index: 279, type: 'BG READING', value: 118 }], ANCHOR);
+      expect(res.treatments).toHaveLength(1);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'BG Check', glucose: 118 });
+    });
+
+    it('reads a numeric string glucose without dropping the fingerstick', () => {
+      const res = mapMarkers([{ index: 279, type: 'BG_READING', value: '118' }], ANCHOR);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'BG Check', glucose: 118 });
+    });
+  });
+
+  describe('BG Check attribution', () => {
+    it('never attaches a fingerstick to a PREVIOUS treatment when it is undatable', () => {
+      // THE BUG THIS GUARDS. `glucose` used to be written to
+      // out.treatments[length - 1]. When the BG marker could not be dated,
+      // emit() returned early and the glucose landed on the meal bolus that
+      // preceded it — corrupting a DIFFERENT event's permanent record.
+      // Measured pre-fix: Meal Bolus carried glucose 118, glucoseType Finger.
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'MEAL', amount: 45 },
+          { index: 280, type: 'INSULIN', amount: 6.5 },
+          { index: 400, type: 'BG_READING', value: 118 }, // past the window
+        ],
+        ANCHOR,
+      );
+      expect(res.undatable).toBe(1);
+      expect(res.treatments).toHaveLength(1);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'Meal Bolus', carbs: 45, insulin: 6.5 });
+      expect(res.treatments[0].glucose).toBeUndefined();
+      expect(res.treatments[0].glucoseType).toBeUndefined();
+    });
+
+    it('attaches the glucose to its own treatment when it IS datable', () => {
+      const res = mapMarkers(
+        [
+          { index: 280, type: 'INSULIN', amount: 3 },
+          { index: 279, type: 'BG_READING', value: 118 },
+        ],
+        ANCHOR,
+      );
+      expect(res.treatments).toHaveLength(2);
+      expect(res.treatments[0]).toMatchObject({ eventType: 'Correction Bolus', insulin: 3 });
+      expect(res.treatments[0].glucose).toBeUndefined();
+      expect(res.treatments[1]).toMatchObject({
+        eventType: 'BG Check', glucose: 118, glucoseType: 'Finger', created_at: atIndex(279),
+      });
+    });
+
+    it('does not swallow a datable bolus when the MEAL at its index is undatable', () => {
+      // The meal could not be dated, so it never reached the output; consuming
+      // its bolus anyway made the insulin vanish with no count anywhere.
+      const res = mapMarkers(
+        [
+          { index: 400, type: 'MEAL', amount: 45 },
+          { index: 400, type: 'INSULIN', amount: 4 },
+        ],
+        ANCHOR,
+      );
+      // The bolus is keyed by index 400 → also undatable, but it must be
+      // REPORTED rather than consumed into nothing.
+      expect(res.undatable).toBe(2);
+      expect(res.treatments).toEqual([]);
+    });
+  });
+
+  describe('scale', () => {
+    it('is not quadratic: 10,000 markers at one index map without stalling', () => {
+      // A nested scan over the bolus bucket per meal would be O(n²) here.
+      // Asserted as a wall-clock budget, which is deliberately loose — the
+      // failure mode is seconds-to-minutes, not milliseconds.
+      const markers: unknown[] = [];
+      for (let i = 0; i < 5000; i++) markers.push({ index: 280, type: 'MEAL', amount: 10 });
+      for (let i = 0; i < 5000; i++) markers.push({ index: 280, type: 'INSULIN', amount: 1 });
+      const started = Date.now();
+      const res = mapMarkers(markers, ANCHOR);
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeLessThan(2000);
+      // Conservation: every bolus is accounted for.
+      const insulin = res.treatments.reduce((s, t) => s + ((t.insulin as number) ?? 0), 0);
+      expect(insulin).toBe(5000);
+      expect(res.treatments.length).toBe(5000);
+    });
+  });
 });

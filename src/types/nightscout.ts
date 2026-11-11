@@ -61,11 +61,31 @@ export interface NightscoutDeviceStatus {
   pump?: {
     battery: { percent: number };
     reservoir: number | undefined;
+    /**
+     * Reservoir as the pump's own 5 snap-point percent (0/25/50/75/100).
+     * Published so a percent-only payload is not silently `undefined` on
+     * `reservoir`; it is NOT a substitute for the units value (research memo
+     * §P2.1 — the capacity needed to convert is not in the payload).
+     */
+    reservoirPercent?: number;
     iob: {
       timestamp: string;
       bolusiob?: number;
     };
     clock: string;
+    /**
+     * SmartGuard auto-mode state, passed through from
+     * `therapyAlgorithmState`. `suspendFired` is `null`, not `false`, when
+     * `plgmLgsState` is a token outside the recorded vocabulary — see
+     * describeAutoMode() in src/transform/index.ts.
+     */
+    autoMode?: {
+      shieldState?: string;
+      plgmState?: string;
+      suspendFired: boolean | null;
+      recognised: boolean;
+      unrecognisedStates: string[];
+    };
   };
   connect: {
     sensorState: string;
