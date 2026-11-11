@@ -90,4 +90,9 @@ export interface NightscoutDeviceStatus {
 export interface TransformResult {
   devicestatus: NightscoutDeviceStatus[];
   entries: NightscoutSGVEntry[];
+  /**
+   * Pump events mapped to Nightscout treatments. Empty when the payload has no
+   * `markers[]`, which is normal for a CGM-only account.
+   */
+  treatments: Record<string, unknown>[];
 }

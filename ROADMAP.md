@@ -154,6 +154,24 @@ shipped here provide the security baseline the deferred
 items will inherit; the discovery-pinning and named-error
 work provides the operational baseline.
 
+> **The "needs a real pump" blocker was wrong, and two of these
+> items have now shipped without one (2026-11-11).**
+>
+> `markers[]` → treatments and `therapyAlgorithmState` → devicestatus
+> were both recovered from the vendor's **own client parser**, which is
+> a published description of the response the app receives. That costs
+> two unauthenticated `GET`s of a JS bundle, not a pump. Recorded in
+> `carelink-api-research` area DP
+> (`findings-log/2026-11-11-area-dp-pump-data-plane/`): the pump-data
+> parser lives **entirely in one lazy chunk**, and 21 of 24 pump-data
+> tokens are zero in the eager bundle — which is why four months of
+> reading the hash-pinned eager bundle found none of it.
+>
+> What is still genuinely blocked on a fixture: `limits[]` (the BG-target
+> schedule) and multi-patient fan-out. What is blocked on a *token*, not
+> a pump: the NGP alarm display strings, which live in i18n bundles the
+> research repo has not yet fetched.
+
 **2026-10-08 update (unauthenticated re-probe):** the watch
 itself is unchanged. Across all 109 country-settings
 entries, `defaultDevice` is still `GM` in all 108 real
