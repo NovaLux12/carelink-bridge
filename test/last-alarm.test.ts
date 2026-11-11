@@ -257,12 +257,32 @@ describe('logLastAlarm fires console.warn for priority-1 codes', () => {
   });
 });
 
-describe('safety contract: no /api/v1/treatments call sites in src/', () => {
-  // Prong (c) — absence grep. Walking the entire src/ tree and asserting
-  // no non-comment, non-string-literal reference to the treatments endpoint.
-  // A future contributor adding `axios.post('/api/v1/treatments', ...)` or
-  // `fetch('/treatments.json')` will fail this test. The contract: alarms
-  // surface as Nightscout devicestatus annotations ONLY.
+describe('safety contract: no ALARM reaches /api/v1/treatments in src/', () => {
+  // Prong (c) — absence grep, SCOPED TO ALARMS.
+  //
+  // THE CONTRACT IS ABOUT ALARMS, NOT ABOUT THE TREATMENTS ENDPOINT.
+  // Several NGP alarm codes mean "Critical Pump Error. Stop using pump" or
+  // "Insulin delivery stopped". Auto-publishing those as Nightscout treatments
+  // would put a machine-generated medical instruction into a record that reads
+  // like a user entry, with no operator in the loop. So alarms surface as
+  // devicestatus annotations ONLY.
+  //
+  // This guard was written as a blanket ban on the string `treatments` anywhere
+  // in src/, which was correct while nothing legitimately posted there. Meals
+  // and boluses now do (src/transform/treatments.ts): that is pump event data,
+  // not an alarm, and dropping it was the bridge's largest missing-data gap.
+  // The guard is therefore narrowed to what it protects — no code path may
+  // carry an ALARM into a treatments payload.
+  //
+  // Narrowed, not weakened: the reviewed-file list below must be updated
+  // deliberately when a new file posts treatments, and the assertion after it
+  // fails if any of them mentions an alarm.
+  const TREATMENTS_FILES = [
+    'src/main.ts',
+    'src/transform/index.ts',
+    'src/transform/treatments.ts',
+    'src/types/nightscout.ts',
+  ];
 
   const srcRoot = path.resolve(__dirname, '..', 'src');
 
@@ -283,24 +303,63 @@ describe('safety contract: no /api/v1/treatments call sites in src/', () => {
   // The contract is zero non-comment references, so assert exactly that. There
   // are only four mentions of `treatments` in src/ at baseline, all in comments,
   // which this check confirms rather than assumes.
-  it('contains no non-comment reference to the treatments endpoint', () => {
-    const offenders: { file: string; line: number; lineText: string }[] = [];
+  it('every src file that mentions treatments is on the reviewed list', () => {
+    const found: string[] = [];
     for (const file of walk(srcRoot)) {
       const raw = fs.readFileSync(file, 'utf8');
-      for (const [lineno, line] of raw.split('\n').entries()) {
-        if (!/\btreatments\b/.test(line)) continue;
-        // F7 (R6): do NOT strip block comments with a regex. A `/*` anywhere in
-        // the file can pair with a much later `*/`, silently swallowing real
-        // code between them — which is how the previous version of this guard
-        // missed five of five injected treatments call sites. Classify the line
-        // directly instead: a comment line starts with // or * (JSDoc), and the
-        // four legitimate mentions in src/ are all of that form.
+      const rel = path.relative(path.resolve(__dirname, '..'), file).split(path.sep).join('/');
+      for (const line of raw.split('\n')) {
         const trimmed = line.trim();
-        const isCommentLine = trimmed.startsWith('//') || trimmed.startsWith('*');
-        if (!isCommentLine) offenders.push({ file, line: lineno + 1, lineText: line });
+        if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+        if (/\btreatments\b/i.test(line)) {
+          if (!found.includes(rel)) found.push(rel);
+          break;
+        }
+      }
+    }
+    // A new file posting treatments must be added here deliberately — that is
+    // the whole point of the list. A file quietly starting to post treatments
+    // fails, which is what the original blanket grep was protecting.
+    expect(found.sort()).toEqual([...TREATMENTS_FILES].sort());
+  });
+
+  it('none of the treatments-posting files shapes an alarm into a treatment', () => {
+    // THE ACTUAL CONTRACT. An alarm must never become a treatment.
+    //
+    // Scope matters here, and narrowing it is what makes this test honest:
+    // `transform/index.ts` legitimately IMPORTS the alarm evaluator and writes
+    // it to `last_alarm` on devicestatus — that is the approved channel. What
+    // must not exist is alarm data reaching a treatments payload. So the
+    // assertion is on alarm references that sit in a treatments context, not on
+    // the bare word `alarm`.
+    const offenders: { file: string; line: number; lineText: string }[] = [];
+    for (const rel of TREATMENTS_FILES) {
+      const file = path.resolve(__dirname, '..', rel);
+      const raw = fs.readFileSync(file, 'utf8');
+      for (const [lineno, line] of raw.split('\n').entries()) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+        // A line that mentions both an alarm and treatments is the shape this
+        // forbids: it is where an alarm would be carried into a treatment.
+        if (/\balarm/i.test(line) && /\btreatments?\b/i.test(line)) {
+          offenders.push({ file: rel, line: lineno + 1, lineText: trimmed.slice(0, 120) });
+        }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('treatments.ts never reads an alarm field', () => {
+    // The mapper itself must be blind to alarms: it takes `markers` only.
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '..', 'src/transform/treatments.ts'),
+      'utf8',
+    );
+    const code = src
+      .split('\n')
+      .filter((l) => !(l.trim().startsWith('//') || l.trim().startsWith('*')))
+      .join('\n');
+    expect(code).not.toMatch(/lastAlarm|alarmCode|sLastAlarm/i);
   });
 
   it('contains no POST/PUT/PATCH call site targeting treatments, any receiver or line span', () => {

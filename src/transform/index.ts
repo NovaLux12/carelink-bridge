@@ -1,6 +1,7 @@
 import * as logger from '../logger.js';
 import type { CareLinkData } from '../types/carelink.js';
 import { evaluateLastAlarm, logLastAlarm } from '../last-alarm.js';
+import { mapMarkers } from './treatments.js';
 
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
@@ -283,6 +284,29 @@ function deviceStatusEntry(
   const lastAlarm: NightscoutLastAlarmAnnotation | undefined =
     lastAlarmEval?.annotation;
 
+  // SmartGuard auto-mode state, read off `therapyAlgorithmState`. Emitted only
+  // when the payload carries the object — a CGM-only account has no pump and
+  // must not gain a phantom annotation. Values are passed through verbatim:
+  // the recorded vocabularies are
+  //   autoModeShieldState : AUTO_BASAL | SAFE_BASAL | FEATURE_OFF
+  //   plgmLgsState        : FEATURE_OFF | REFRACTORY_PERIOD | MONITORING |
+  //                         SUSPEND_FIRED_PLGM | SUSPEND_FIRED_LGS
+  // but they were recovered from the vendor's own parser, never from a captured
+  // payload (carelink-api-research area DP §3), so an unrecorded value is a
+  // possibility and is surfaced rather than filtered out.
+  const therapy = data.therapyAlgorithmState;
+  const autoMode = therapy && typeof therapy === 'object'
+    ? {
+        shieldState: therapy.autoModeShieldState,
+        plgmState: therapy.plgmLgsState,
+        // A fired PLGM/LGS suspend means delivery has stopped. Exposed as a
+        // boolean so a consumer does not have to know the token set.
+        suspendFired:
+          therapy.plgmLgsState === 'SUSPEND_FIRED_PLGM' ||
+          therapy.plgmLgsState === 'SUSPEND_FIRED_LGS',
+      }
+    : undefined;
+
   // Resolve once: on a BLE payload the family may arrive only as
   // `deviceFamily`, so reading `medicalDeviceFamily` directly would miss the
   // GUARDIAN branch as well as crash in deviceName(). Same fix, same reason.
@@ -350,6 +374,13 @@ function deviceStatusEntry(
           ? resolveReadingTime(data.sMedicalDeviceTime, offsetMilliseconds, data)
           : deviceUpdateAt
       ),
+      // SmartGuard's own auto-mode state (carelink-api-research area DP §3).
+      // `plgmLgsState` is the clinically interesting half: SUSPEND_FIRED_PLGM /
+      // SUSPEND_FIRED_LGS mean the pump has stopped delivering. Both fields are
+      // passed through verbatim rather than translated into an invented enum —
+      // a value outside the recorded vocabulary is data, not corruption, and a
+      // consumer should be able to see it.
+      ...(autoMode ? { autoMode } : {}),
     },
     connect: {
       sensorState: data.sensorState,
@@ -440,7 +471,7 @@ export function transform(data: CareLinkData, sgvLimit?: number): TransformResul
 
     if (recency > STALE_DATA_THRESHOLD_MINUTES) {
       logger.log('Stale CareLink data: ' + recency.toFixed(2) + ' minutes old');
-      return { devicestatus: [], entries: [] };
+      return { devicestatus: [], entries: [], treatments: [] };
     }
   } else {
     logger.log(
@@ -452,8 +483,33 @@ export function transform(data: CareLinkData, sgvLimit?: number): TransformResul
   const offsetMilliseconds = guessPumpOffsetMilliseconds(data);
   const limit = sgvLimit ?? Infinity;
 
+  // Markers are dated RELATIVE to the newest datapoint, so they need the same
+  // anchor the SGV path uses. Reusing `deviceUpdateAt` rather than re-deriving
+  // it keeps one clock: a marker and the reading beside it cannot disagree
+  // about what "now" is.
+  const markerAnchor = Number.isFinite(data.lastMedicalDeviceDataUpdateServerTime)
+    ? (data.lastMedicalDeviceDataUpdateServerTime as number)
+    : newestReadingTime(data);
+  const markers = mapMarkers(data.markers, markerAnchor);
+  if (markers.undatable > 0) {
+    // Loud, because the alternative reading is "this fetch had no meals" when
+    // in fact it had some that could not be placed in time.
+    logger.warn(
+      'Dropped ' + markers.undatable + ' marker(s) that could not be dated ' +
+        '(no usable anchor)',
+      { undatable: markers.undatable },
+    );
+  }
+  const unmappedKinds = Object.entries(markers.unmapped);
+  if (unmappedKinds.length > 0) {
+    logger.log('Markers present but not mapped to treatments', {
+      unmapped: markers.unmapped,
+    });
+  }
+
   return {
     devicestatus: [deviceStatusEntry(data, offset, offsetMilliseconds)],
     entries: sgvEntries(data, offset, offsetMilliseconds).slice(-limit),
+    treatments: markers.treatments,
   };
 }

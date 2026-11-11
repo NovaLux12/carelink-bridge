@@ -137,9 +137,58 @@ export interface CareLinkData {
   reservoirLevelPercent?: number;
   activeInsulin?: CareLinkActiveInsulin;
   lastAlarm?: CareLinkAlarm;
+  /**
+   * The pump's own event stream: meals, boluses, fingersticks, calibration,
+   * and SmartGuard's own activity. Present on the periodic connect-data
+   * response. Mapped to Nightscout treatments by `src/transform/treatments.ts`.
+   */
+  markers?: CareLinkMarker[];
+  /**
+   * SmartGuard's auto-mode state. Two nested fields, two disjoint vocabularies:
+   *
+   *   autoModeShieldState : AUTO_BASAL | SAFE_BASAL | FEATURE_OFF
+   *   plgmLgsState        : FEATURE_OFF | REFRACTORY_PERIOD | MONITORING |
+   *                         SUSPEND_FIRED_PLGM | SUSPEND_FIRED_LGS
+   *
+   * `plgmLgsState` is the Predictive-Low-Glucose-Management / Low-Glucose-
+   * Suspend state: SUSPEND_FIRED_* means the pump has stopped delivery. Both
+   * vocabularies come from the vendor's own client parser
+   * (carelink-api-research area DP §3), not from a captured payload — so a
+   * value outside these sets is possible and is surfaced rather than dropped.
+   */
+  therapyAlgorithmState?: CareLinkTherapyAlgorithmState;
   bgUnits?: string;
   bgunits?: string;
   timeFormat?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * One entry of the pump's `markers[]` event stream.
+ *
+ * `index` is a SLOT, not a timestamp: the real time is
+ * `anchor − (287 − index) × 300_000 ms`. See `src/transform/treatments.ts`.
+ */
+export interface CareLinkMarker {
+  index?: number;
+  type?: string;
+  /** Carbs on a MEAL, units on an INSULIN, glucose on a BG reading. */
+  amount?: number;
+  value?: number;
+  deliverySuspended?: boolean;
+  dateTime?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * SmartGuard auto-mode state. Field names and both vocabularies are OBSERVED in
+ * the vendor's own client parser; whether a given pump populates them is not.
+ */
+export interface CareLinkTherapyAlgorithmState {
+  /** `AUTO_BASAL`, `SAFE_BASAL` or `FEATURE_OFF`. */
+  autoModeShieldState?: string;
+  /** `FEATURE_OFF`, `REFRACTORY_PERIOD`, `MONITORING`, `SUSPEND_FIRED_PLGM`, `SUSPEND_FIRED_LGS`. */
+  plgmLgsState?: string;
   [key: string]: unknown;
 }
 

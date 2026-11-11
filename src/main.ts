@@ -50,6 +50,7 @@ client.setRefreshTracking(persisted.lastRefreshTokenUse, persisted.nextScheduled
 const baseUrl = config.nsBaseUrl || ('https://' + config.nsHost);
 const entriesUrl = baseUrl + '/api/v1/entries.json';
 const devicestatusUrl = baseUrl + '/api/v1/devicestatus.json';
+const treatmentsUrl = baseUrl + '/api/v1/treatments.json';
 
 const filterSgvs = makeRecencyFilter<NightscoutSGVEntry>(item => item.date);
 const filterDeviceStatus = makeRecencyFilter<NightscoutDeviceStatus>(
@@ -229,6 +230,12 @@ async function requestLoop(): Promise<void> {
         const transformed = transform(data, config.sgvLimit);
         const newSgvs = filterSgvs(transformed.entries);
         const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
+        // Treatments carry a deterministic _id (see transform/treatments.ts), so
+        // Nightscout's own _id dedup makes a re-post an UPDATE rather than a
+        // duplicate. No local filter is applied: a marker we already sent must
+        // still be sent while it is in CareLink's rolling 24 h window, or a
+        // restart would never re-assert a meal it had not yet seen.
+        const newTreatments = transformed.treatments;
 
         lastSuccessTimestamp = Date.now();
         staleNotified = false;
@@ -238,6 +245,7 @@ async function requestLoop(): Promise<void> {
           sgvCount: transformed.entries.length,
           newSgvCount: newSgvs.length,
           newDeviceStatusCount: newDeviceStatuses.length,
+          treatmentCount: newTreatments.length,
         });
 
         logger.log(
@@ -247,6 +255,7 @@ async function requestLoop(): Promise<void> {
 
         await uploadIfNew(newSgvs, entriesUrl);
         await uploadIfNew(newDeviceStatuses, devicestatusUrl);
+        await uploadIfNew(newTreatments, treatmentsUrl);
       }
     } catch (error) {
       metrics.incFetch('failure');

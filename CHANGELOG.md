@@ -12,6 +12,59 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Publish pump events as Nightscout treatments, and SmartGuard auto-mode as devicestatus (#123)
+
+The bridge posted two Nightscout documents per fetch — `entries` and
+`devicestatus` — and silently discarded `markers[]`, which is where CareLink
+puts every meal, bolus and fingerstick. A working pump therefore reached
+Nightscout as a CGM with no insulin history. The research repo calls this the
+single largest "available but unused" gap, and `ROADMAP.md` had it deferred
+until "a real pump arrives".
+
+**That blocker was wrong.** Both this and `therapyAlgorithmState` were recovered
+from the vendor's own client parser, which is a published description of the
+response the app receives — two unauthenticated `GET`s of a JS bundle, not a
+pump. The reason four months of searching found nothing is structural: the
+pump-data parser lives **entirely in one lazy chunk**, and **21 of 24** pump-data
+tokens are zero in the hash-pinned eager bundle the repo had been reading
+(`carelink-api-research` area DP).
+
+Added:
+
+- `src/transform/treatments.ts` — `markers[]` → Nightscout treatments.
+  - A `MEAL` and its `INSULIN` at the same `index` become **one `Meal Bolus`**
+    carrying both carbs and insulin; an unpaired `INSULIN` is a
+    `Correction Bolus`; a meal with no bolus is a `Carb Correction`.
+  - `BG_READING` / `BG` / `CALIBRATION` become `BG Check` with
+    `glucoseType: 'Finger'`.
+  - Marker times are derived as `anchor − (287 − index) × 300_000 ms`. **A
+    marker array with no usable anchor is refused, not dated** — emitting
+    `Date.now()` there would stamp every historic meal with the fetch time,
+    which is the same defect this bridge already carries a correction for on
+    the CGM path.
+  - `_id` is a deterministic hash of `(time, eventType, carbs, insulin)`, so
+    CareLink's rolling 24 h re-send **updates** rather than appending a
+    duplicate meal every poll.
+  - `AUTO_BASAL_DELIVERY` and `AUTO_MODE_STATUS` are **counted and logged, not
+    mapped**: the vendor's own client never handles them either, so inventing a
+    treatment shape would be fabrication.
+- `therapyAlgorithmState` → `devicestatus.pump.autoMode`, carrying
+  `shieldState`, `plgmState` and a derived `suspendFired` boolean.
+  `plgmLgsState` is the Low-Glucose-Suspend state — `SUSPEND_FIRED_PLGM` /
+  `SUSPEND_FIRED_LGS` mean the pump has stopped delivering. Values pass through
+  verbatim because the vocabularies were recovered from the parser, never from a
+  captured payload, so an unrecorded value is possible and is data rather than
+  corruption.
+
+**The alarm safety contract is unchanged and still enforced.** Several NGP codes
+mean *"Critical Pump Error. Stop using pump"*; those must never be auto-published
+as treatments. The guard in `test/last-alarm.test.ts` was written as a blanket ban
+on the string `treatments` in `src/`, which was correct while nothing posted
+there. It is now **scoped to what it protects**: a reviewed list of files that may
+mention treatments, plus assertions that none of them carries an alarm into one
+and that the mapper is blind to alarm fields. Plant-tested — adding an alarm read
+to the mapper fails the suite.
+
 ### Correct the device-family matcher against Medtronic's published vocabulary (#95)
 
 Medtronic publishes the complete device-family vocabulary, unauthenticated, at
