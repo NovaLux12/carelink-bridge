@@ -129,6 +129,117 @@ function assertSupportedCumulusTrack(
 }
 
 /**
+ * Named error for "the identity endpoint answered, but not with a user record".
+ *
+ * Separate from `NoAuth0SSOConfigurationError` on purpose: that one is about the
+ * *discovery* document and the app-version pin, this one is about
+ * `/patient/users/me` and the identity namespace. They point at different fixes
+ * and must not be grepped as one marker.
+ *
+ * Why this exists (area AO / research `docs/02` §4): the bridge asks
+ * `GET {host}/patient/users/me` for the account identity, while the official
+ * app uses `/api/carepartner/v2/{users/me,links/patients}`. Both 401
+ * unauthenticated, so which one a given token can actually read is unverified
+ * from outside — the carepartner/v2 namespace is account-gated and NOT
+ * implemented. What can be fixed without credentials is the failure mode: before
+ * this guard, a 200 carrying anything that is not a user record (an HTML error
+ * page, a JSON array, `{"error":{"type":"InvalidToken"}}`, a bare number) was
+ * assigned to `currentUser`, produced an empty `role`, fell through the legacy
+ * chain, and ended as an empty `{}` payload reported as success — a silent
+ * zero-data fetch with no error to grep.
+ */
+export class UnexpectedUserInfoError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnexpectedUserInfoError';
+    Object.setPrototypeOf(this, UnexpectedUserInfoError.prototype);
+  }
+}
+
+/**
+ * Assert that a `/patient/users/me` body is a user record — a non-null,
+ * non-array object — and return it typed as one.
+ *
+ * Deliberately SHAPE-only, not field-strict:
+ *
+ *  - A body that is not an object at all cannot be an account record under any
+ *    namespace, so it fails loudly here rather than becoming an empty role and
+ *    an empty data payload three calls later.
+ *  - A body that IS an object but omits `username` or `role` does not throw.
+ *    `username` legitimately differs from `CARELINK_USERNAME` and callers
+ *    already fall back to the configured value (pinned by
+ *    test/username-source.test.ts); a missing `role` is tolerated by the legacy
+ *    routing. Tightening those would turn a tolerated field difference into an
+ *    outage.
+ *  - The ONE exception to that leniency is an object that carries a top-level
+ *    `error` and no usable `role`: the vendor's own rejection envelope is
+ *    `{"error":{"type":"InvalidToken"}}`, and it can arrive with a 200. That is
+ *    a failure wearing a success status, not a field difference.
+ *
+ * `context` carries what an operator needs and nothing that could leak account
+ * data: the URL and the region. The body itself is never quoted — it may carry
+ * the account's username or e-mail. `error.type` IS quoted: it is a vendor
+ * error code, not account data, and it is the most greppable thing available.
+ */
+export function assertUserInfoShape(
+  body: unknown,
+  context: { url: string; region?: string },
+): Record<string, unknown> {
+  const isRecord =
+    typeof body === 'object' && body !== null && !Array.isArray(body);
+
+  if (!isRecord) {
+    const observed = Array.isArray(body)
+      ? `an array of ${body.length} element(s)`
+      : body === null
+        ? 'null'
+        : `a ${typeof body}`;
+    throw new UnexpectedUserInfoError(
+      `Identity endpoint ${context.url} returned HTTP 200 with ${observed}, ` +
+      `which is not a user record (expected a JSON object with at least "role"; ` +
+      `${context.region ? `region "${context.region}", ` : ''}` +
+      `no credentials in the body are logged). The bridge cannot resolve a ` +
+      `username or role from this, so every data call downstream would be ` +
+      `addressed to an empty identity — stopping here instead of uploading an ` +
+      `empty payload. Usual causes: the token is not valid for the carelink ` +
+      `host's /patient namespace (the official app uses /api/carepartner/v2), ` +
+      `or a gateway returned an HTML body with a 200.`,
+    );
+  }
+
+  // An OBJECT body can still be an error: the vendor's own 401 shape is
+  // `{"error":{"type":"InvalidToken"}}`, and a 200 carrying that envelope is
+  // indistinguishable from a user record purely by `typeof`. It is only
+  // recognisable by the `error` key, which is why the shape test above is not
+  // sufficient on its own.
+  //
+  // Narrow by construction: an envelope is `error` present AND no usable `role`.
+  // A user record carries `role` (the legacy routing branches on it), so the
+  // conjunction cannot reject one, and a record that merely happens to carry an
+  // unrelated `error` field alongside its role is still accepted.
+  const errorField = (body as Record<string, unknown>)['error'];
+  const roleField = (body as Record<string, unknown>)['role'];
+  const hasRole = typeof roleField === 'string' && roleField.trim() !== '';
+  if (errorField !== undefined && !hasRole) {
+    const type =
+      typeof errorField === 'object' && errorField !== null
+        ? (errorField as Record<string, unknown>)['type']
+        : undefined;
+    throw new UnexpectedUserInfoError(
+      `Identity endpoint ${context.url} returned HTTP 200 carrying an error envelope` +
+      `${typeof type === 'string' ? ` (error.type="${type}")` : ''} instead of a user record` +
+      `${context.region ? ` [region "${context.region}"]` : ''}. The endpoint reports failure ` +
+      `with a 200 here, so the status line is not an oracle: the token was rejected even ` +
+      `though nothing threw. The bridge reads identity from /patient/users/me while the ` +
+      `official app reads /api/carepartner/v2/users/me, so this is the likely place a token ` +
+      `valid for one namespace and not the other shows up. Not uploading an empty payload.`,
+    );
+  }
+
+  return body as Record<string, unknown>;
+}
+
+/**
  * Returns the SSO config URL declared by the discovery entry, or throws
  * `NoAuth0SSOConfigurationError` when the entry is not on the supported
  * cumulus track, or when neither the explicit selector nor the default key
@@ -157,17 +268,62 @@ export function selectAuth0ConfigUrl(
   // Issue #75: validate the track before trusting any URL the entry carries.
   assertSupportedCumulusTrack(cpEntry, context);
 
+  // The selector, with a defensive default.
+  //
+  // ⚠ `?? 'Auth0SSOConfiguration'` is **unproven-but-harmless, and deliberately
+  // kept** — do not read it as a live code path. Area AO (2026-11-11 §4)
+  // measured it against every entry this project has a record of: across the
+  // **67 `CP[]` entries** of area AO's ledger and area AH's, on three hosts,
+  // `UseSSOConfiguration` and `Auth0SSOConfiguration` appear **together or not
+  // at all** (0 entries carry the Auth0 key while the selector is missing), and
+  // where both are present the selector holds the literal string
+  // `Auth0SSOConfiguration`. So the right operand cannot be reached by any
+  // recorded document: the expression resolves on its left operand every time.
+  //
+  // Why keep it rather than delete it:
+  //   1. Deleting it changes the failure mode of an unseen document from "we
+  //      read the Auth0 key the vendor has always published under that exact
+  //      name" to "we throw despite the key being right there". The default is
+  //      the name the live documents use verbatim, so it can only help.
+  //   2. It is not masking a misconfiguration: the track gate above runs first
+  //      and fails closed, so an entry that reaches this line is already on
+  //      cumulus v13. A wrong-track cell can never be silently rescued here.
+  //   3. It costs nothing at runtime — one nullish check on a value that is
+  //      already in hand.
+  //
+  // What it must NOT be used for is a claim that the bridge supports documents
+  // where the selector is absent. It does not; that shape has never been
+  // observed (INFERRED from AO's key-membership measurement, not executed
+  // against the vendor's server).
   const explicitKey = cpEntry.UseSSOConfiguration;
   const key = explicitKey ?? 'Auth0SSOConfiguration';
   const candidate = cpEntry[key];
   if (typeof candidate === 'string' && candidate.length > 0) {
     return candidate;
   }
+
+  // Name WHICH unresolved shape this is, because the three need different
+  // fixes and they arrive as the same `undefined` otherwise. This is the
+  // legibility requirement for area AO's `3.9`/`3.10` case: there the entry
+  // carries no Auth0 key at all, and "no URL resolved" alone would send an
+  // operator hunting the wrong field.
+  const carrier = Object.prototype.hasOwnProperty.call(cpEntry, key);
+  const observed =
+    explicitKey === undefined
+      ? `the entry carries no UseSSOConfiguration selector and no ` +
+        `${carrier ? 'usable' : 'missing'} "${key}" value`
+      : !carrier
+        ? `UseSSOConfiguration="${explicitKey}" names a key this entry does not carry`
+        : `UseSSOConfiguration="${explicitKey}" names "${key}", whose value is ` +
+          `${typeof candidate === 'string' ? 'an empty string' : `not a string (got ${typeof candidate})`}`;
+
   throw new NoAuth0SSOConfigurationError(
     `Discovery returned no Auth0 SSO config URL for region "${context.region}" ` +
-    `(UseSSOConfiguration=${explicitKey ?? 'absent'}). This usually means ` +
-    `DISCOVERY_APP_VERSION ("${context.appVersion}") points at a config track without Auth0 — ` +
-    `keep it on a version known to return Auth0SSOConfiguration, i.e. one of the ` +
+    `(UseSSOConfiguration=${explicitKey ?? 'absent'}) — ${observed}. This usually means ` +
+    `DISCOVERY_APP_VERSION ("${context.appVersion}") points at a config track without Auth0, ` +
+    `which is the shape android/3.9, 3.10 and every 4.x tail return (area AO/AH measured the ` +
+    `Auth0 key as absent there; it is present on 3.5–3.8). ` +
+    `Fix: keep it on a version known to return Auth0SSOConfiguration, i.e. one of the ` +
     `verified cumulus-v13 family: ${VERIFIED_AUTH0_V13_FAMILY.join(', ')}.`,
   );
 }
