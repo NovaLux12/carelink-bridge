@@ -45,7 +45,7 @@ function fullPayload(): CareLinkData {
       { index: 280, type: 'INSULIN', amount: 5 },
       { index: 279, type: 'BG_READING', value: 118 },
     ],
-  } as CareLinkData;
+  } as unknown as CareLinkData;
 }
 
 describe('payloadCensus', () => {
