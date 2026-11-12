@@ -317,9 +317,14 @@ The bridge wakes up, checks if it's time to fetch, and:
 3. **Calls CareLink's data API** for your latest pump and
    sensor readings.
 4. **Transforms the data** into Nightscout's format.
-5. **Uploads only the new entries.** The bridge remembers
-   what's already been uploaded (in memory) and skips it
-   on the next round.
+5. **Uploads to Nightscout.** Three collections go up
+   separately: CGM `entries`, `devicestatus` (reservoir,
+   battery, IOB, SmartGuard auto-mode state, last alarm),
+   and `treatments` — which is where your meals, boluses
+   and fingersticks land. Entries and devicestatus are
+   filtered to what is new; treatments carry a deterministic
+   `_id`, so CareLink's rolling re-send updates the existing
+   record instead of duplicating it.
 6. **Sleeps until the next interval.** Default is 300
    seconds (5 minutes).
 

@@ -14,6 +14,7 @@ import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
+import type { UploadEndpoint } from './metrics.js';
 import type { Server } from 'node:http';
 import { startObserveServer } from './observe-server.js';
 import { login, LOGINDATA_FILE } from './login.js';
@@ -193,7 +194,14 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
   }
   try {
     const stored = await upload(items, endpoint, config.nsSecret);
-    const kind = endpoint.includes('entries') ? 'entries' as const : 'devicestatus' as const;
+    // Derive the metric label from the endpoint we actually posted to. The
+    // previous shape was a two-way `entries` / not-`entries` test, so treatments
+    // were counted as devicestatus the moment they became a third target.
+    const kind: UploadEndpoint = endpoint.includes('entries')
+      ? 'entries'
+      : endpoint.includes('treatments')
+        ? 'treatments'
+        : 'devicestatus';
     metrics.incUpload(kind, stored);
     // Report what was STORED, not what was sent. Nightscout dedups entries on
     // (sysTime, type) by upsert, so a re-post silently updates an existing row

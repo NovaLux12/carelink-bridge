@@ -29,9 +29,17 @@ flowchart LR
   UPLOAD -- "HTTPS POST<br/>sha1(API_SECRET) header" --> NS
 ```
 
-The bridge is a **fetch-and-upload daemon**. It owns no long-lived
-state except a single file (`logindata.json`) holding the OAuth
-tokens. By default there is no inbound network listener; the bridge only
+The bridge is a **fetch-and-upload daemon**. It owns two long-lived
+files, both beside each other:
+
+- `logindata.json` — the OAuth tokens (atomic 0600 write, ADR 0003)
+- `state.json` — `lastSuccessTimestamp`, so the stale-data alert survives a
+  restart instead of re-arming from zero (`src/persistent-state.ts`)
+
+An earlier revision of this paragraph said *"a single file"*. That was true
+until persistent state landed; it is no longer accurate.
+
+By default there is no inbound network listener; the bridge only
 initiates outbound HTTPS. Setting CARELINK_METRICS_PORT opts into a
 loopback-only observability server (/healthz + /metrics, src/observe-server.ts).
 
@@ -44,33 +52,41 @@ src/
 ├── doctor.ts                # `npm run doctor` — pre-flight self-check
 ├── discovery.ts             # CareLink discovery app-version pin (ADR 0002)
 ├── login.ts                 # Three-strategy OAuth login flow
-├── login-errors.ts          # Named error class for missing Auth0 config
+├── login-errors.ts          # Named error classes for Auth0 / identity-endpoint failures
 ├── filter.ts                # Recency filter — only upload new entries
-├── last-alarm.ts            # CareLink alarm → Nightscout annotation
+├── last-alarm.ts            # CareLink alarm → Nightscout annotation (73-code vendor tiering)
 ├── logger.ts                # Structured logger: pretty (default) or json (LOG_FORMAT=json); redacts credential-looking field KEYS
 ├── metrics.ts               # Prometheus counters/gauges + renderPrometheus() (incl. carelink_circuit_open)
 ├── observe-server.ts        # Opt-in loopback /healthz + /metrics server (node:http, CARELINK_METRICS_PORT)
 ├── refresh-failure.ts       # Classify Auth0 refresh failures (recoverable vs permanent)
 ├── retry-policy.ts          # Status-aware retry (ADR 0001)
+├── circuit-breaker.ts       # Closed/open/half-open breaker for CareLink fetch failures
+├── persistent-state.ts      # `state.json` beside logindata: lastSuccessTimestamp survives restart
+├── payload-census.ts        # Counts which pump-data tokens a payload actually carried (validation-day aid)
 │
 ├── carelink/                # The CareLink client + token storage
 │   ├── client.ts            # CareLinkClient: fetch() loop, BLE/carepartner branch, forceRefresh
+│   ├── cumulus.ts           # Cumulus data-plane requests (the pump-data path)
 │   ├── token.ts             # LoginData persistence: atomic 0600 write (ADR 0003), JWT helpers
 │   └── urls.ts              # EU/US server resolution + URL builders
 │
 ├── nightscout/              # The Nightscout uploader
-│   └── upload.ts            # POST entries/devicestatus, sha1(API_SECRET) header
+│   └── upload.ts            # POST entries / devicestatus / treatments, sha1(API_SECRET) header
 │
-├── transform/               # CareLinkData → NightscoutSGVEntry + NightscoutDeviceStatus
-│   ├── index.ts             # Main transform: SGVs, devicestatus, mmol/L detection, trend mapping
+├── transform/               # CareLinkData → Nightscout entries + devicestatus + treatments
+│   ├── index.ts             # Main transform: SGVs, devicestatus, mmol/L detection, trend mapping, marker hand-off
+│   ├── treatments.ts        # markers[] → Nightscout treatments (Meal Bolus / Correction / BG Check)
 │   ├── pump-offset.ts       # Quarter-hour pump-clock offset guess
 │   └── trend-map.ts         # CareLink trend string → Nightscout trend number
 │
 └── types/                   # Type definitions only — no runtime code
     ├── carelink.ts          # CareLinkData, CareLinkUserInfo, Auth0SSOConfig, LoginData
-    ├── nightscout.ts        # NightscoutSGVEntry, NightscoutDeviceStatus, TransformResult
+    ├── nightscout.ts        # NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutTreatment, TransformResult
     └── config.ts            # Config interface (the shape of the loaded .env)
 ```
+
+`index.ts` in the `src/` root is the module barrel; the fetch loop lives in
+`main.ts`.
 
 ### Where to start as a new contributor
 
@@ -119,10 +135,11 @@ sequenceDiagram
     end
     Client-->>Main: CareLinkData
     Main->>Trans: transform(data, sgvLimit)
-    Trans-->>Main: { entries: SGVEntry[], devicestatus: DeviceStatus[] }
+    Trans-->>Main: { entries, devicestatus, treatments }
     Main->>Main: filter out already-uploaded (recency filter)
     Main->>NS: POST /api/v1/entries.json
     Main->>NS: POST /api/v1/devicestatus.json
+    Main->>NS: POST /api/v1/treatments.json
   end
 ```
 
@@ -621,7 +638,13 @@ CareLinkData (src/types/carelink.ts)
   │                  ──transform──▶  NightscoutDeviceStatus[]  ──POST──▶  /api/v1/devicestatus.json
   ├── lastAlarm      ──transform──▶  NightscoutLastAlarmAnnotation
   │                                    on the device status entry
-  └── activeInsulin  ──transform──▶  pump.iob on the device status entry
+  ├── activeInsulin  ──transform──▶  pump.iob on the device status entry
+  ├── therapyAlgorithmState
+  │                  ──transform──▶  pump.autoMode on the device status entry
+  │                                    (shieldState, plgmState, suspendFired)
+  └── markers[]      ──transform──▶  NightscoutTreatment[]  ──POST──▶  /api/v1/treatments.json
+                                       (Meal Bolus / Correction Bolus /
+                                        Carb Correction / BG Check)
 ```
 
 The full mapping is in `src/transform/index.ts`. Notable details:

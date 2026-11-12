@@ -20,22 +20,29 @@ Each phase below has the same shape:
    "blocked" should name the specific thing that's missing.
 6. **Tracking** — the GitHub issue and any workboard card.
 
-## Phase status (2026-10-09)
+## Phase status (2026-11-12)
 
-| Phase | Status | Notes |
-|-------|--------|-------|
-| v0.1.0 | Shipped 2026-07-18 | Minimum viable fork |
-| v0.1.1 | Shipped 2026-07-19 | Post-release hygiene |
-| v0.1.2 | Shipped 2026-07-19 | Supply-chain reduction |
-| v0.1.3 | Shipped 2026-07-19 | Deployment artifacts |
-| v0.1.4 | Shipped 2026-07-19 | Auth retry reliability |
-| v0.1.5 | Shipped 2026-07-19 | Username source fix |
-| v0.1.6 | Shipped 2026-07-19 | `npm run doctor` |
-| v0.2.0 | Shipped 2026-07-22 | Safety + reliability hardening + operability (SIGTERM, stale-data) |
-| v0.3.0 | Shipped 2026-09-09 | Circuit breaker + persistent state (#58) |
-| v0.4.0 | Partially shipped | Structured logs (#51) + /healthz + /metrics (#59); #10 still open |
-| v0.5.0 | Partially shipped | Distribution (systemd done; docker, single-binary, HASS pending) |
-| v0.6.0+ | Proposed, low priority | Advanced features |
+**Read this carefully: "shipped" in this table means the *code* is on `main`,
+not that a tag exists.** Only `v0.1.0`–`v0.2.0` have been tagged and released
+(8 tags, 8 releases). The v0.3.0 and v0.4.0 *work* merged long ago but the
+version was never cut, so `package.json` still reads `0.2.0` and
+`git tag` stops at `v0.2.0`. That is the same version-metadata drift
+CONTRIBUTING.md warns about, and v0.3.0 is the release that closes it.
+
+| Phase | Code on `main` | Tag / release | Notes |
+|-------|---------------|---------------|-------|
+| v0.1.0 | ✅ | **v0.1.0** (2026-07-18) | Minimum viable fork |
+| v0.1.1 | ✅ | **v0.1.1** (2026-07-19) | Post-release hygiene |
+| v0.1.2 | ✅ | **v0.1.2** (2026-07-19) | Supply-chain reduction |
+| v0.1.3 | ✅ | **v0.1.3** (2026-07-19) | Deployment artifacts |
+| v0.1.4 | ✅ | **v0.1.4** (2026-07-19) | Auth retry reliability |
+| v0.1.5 | ✅ | **v0.1.5** (2026-07-19) | Username source fix |
+| v0.1.6 | ✅ | **v0.1.6** (2026-07-19) | `npm run doctor` |
+| v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening + operability |
+| v0.3.0 | ✅ | ⬜ **untagged** | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 590-test suite |
+| v0.4.0 | ✅ | ⬜ untagged | Folded into v0.3.0 — the observability work (#51, #59) merged before this release and ships with it |
+| v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
+| v0.6.0+ | ❌ | — | Proposed, low priority |
 
 ---
 
@@ -223,23 +230,39 @@ than the fetch loop. Details in
 ("Reports API"); the vendor-side host and gateway evidence is in
 [NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/07-admin-portal-and-reporting.md).
 
-## v0.3.0 — reliability (shipped 2026-09-09, #58)
+## v0.3.0 — reliability + pump data (code shipped, release pending)
+
+**Status:** the code below is on `main`; **no `v0.3.0` tag exists yet.** This is
+the release that carries it. The observability work originally planned as
+v0.4.0 (#51, #59) merged before this tag and ships in the same release rather
+than waiting for its own.
 
 **Goal:** make the bridge more resilient to CareLink's
-uptime and rate-limiting without operator intervention.
+uptime and rate-limiting without operator intervention, and
+carry the pump's own event stream through to Nightscout.
 
 - [x] Circuit breaker for CareLink (don't hammer if they're down)
 - [x] Persistent state file for last successful fetch time
 - [x] Token refresh before expiry (not just on failure)
+- [x] Pump `markers[]` → Nightscout **treatments** — meals, boluses and
+      fingersticks now reach Nightscout instead of being discarded (#123)
+- [x] `therapyAlgorithmState` → **SmartGuard auto-mode** on devicestatus,
+      with `shieldState`, `plgmState` and a derived `suspendFired` (#123)
+- [x] Alarm tiering corrected against the vendor's own 73-code table; 53
+      codes that were logging at INFO now raise the WARN (#128)
 
-**What unblocks it:** v0.2.0 has shipped, and the `decideRetry` policy
-from v0.2.0 gives us the building block for a circuit breaker. Real-data
-validation against a 780G would also let us verify the persistent state
-file isn't clobbered by token refresh races.
+**What unblocked it:** the pump-data vocabulary was recovered from the
+vendor's own client parser (net *fewer* requests than trying to capture a
+pump), so the old "wait for a real 780G" gate was withdrawn — it was
+wrong, not merely inconvenient.
 
 **Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9)
 
-## v0.4.0 — observability (partially shipped, #51 and #59)
+## v0.4.0 — observability (code shipped, release folded into v0.3.0)
+
+**Status:** everything below is on `main`, but **no `v0.4.0` tag exists** and
+none will be cut — the work shipped inside the v0.3.0 release. This heading is
+kept so the original plan stays readable rather than being deleted.
 
 **Goal:** make the bridge debuggable from logs and metrics,
 not just from `console.log` scraping.
@@ -264,7 +287,11 @@ of hosts, beyond the current `git clone` + systemd path.
 
 - [x] systemd unit example — shipped in v0.1.3
 - [ ] Single static binary (using `pkg` or `bun build`)
-- [ ] Docker image of the bridge itself (Nightscout docker-compose shipped in v0.1.3)
+- [x] **Dockerfile for the bridge** — ships in the repo (#61); `docker build -t carelink-bridge .`
+      is the documented path in [deploy/README.md](./deploy/README.md)
+- [ ] **Published image** — no registry image is pushed and no workflow builds one.
+      Users build locally rather than pulling. (Distinct from the line above: the
+      Dockerfile exists, the *distribution* does not.)
 - [ ] Home Assistant add-on (low priority)
 
 **What unblocks the single-binary work:** confirming

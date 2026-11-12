@@ -17,12 +17,13 @@
  */
 
 export type FetchResult = 'success' | 'failure';
-export type UploadEndpoint = 'entries' | 'devicestatus';
+export type UploadEndpoint = 'entries' | 'devicestatus' | 'treatments';
 
 let fetchesSuccess = 0;
 let fetchesFailure = 0;
 let uploadsEntries = 0;
 let uploadsDevicestatus = 0;
+let uploadsTreatments = 0;
 let tokenRefreshSuccess = 0;
 let tokenRefreshFailure = 0;
 let lastSuccessTimestampMs: number | null = null;
@@ -37,7 +38,11 @@ export function incFetch(result: FetchResult): void {
 }
 
 export function incUpload(endpoint: UploadEndpoint, count = 1): void {
+  // Explicit per-endpoint counting. The previous shape defaulted anything that
+  // was not `entries` into the devicestatus counter, which silently inflated
+  // devicestatus once treatments became a third upload target.
   if (endpoint === 'entries') uploadsEntries += count;
+  else if (endpoint === 'treatments') uploadsTreatments += count;
   else uploadsDevicestatus += count;
 }
 
@@ -66,6 +71,7 @@ export function getSnapshot() {
     fetchesFailure,
     uploadsEntries,
     uploadsDevicestatus,
+    uploadsTreatments,
     tokenRefreshSuccess,
     tokenRefreshFailure,
     lastSuccessTimestampMs,
@@ -79,6 +85,7 @@ export function reset(): void {
   fetchesFailure = 0;
   uploadsEntries = 0;
   uploadsDevicestatus = 0;
+  uploadsTreatments = 0;
   tokenRefreshSuccess = 0;
   tokenRefreshFailure = 0;
   lastSuccessTimestampMs = null;
@@ -106,6 +113,7 @@ export function renderPrometheus(): string {
   lines.push('# TYPE carelink_uploads_total counter');
   lines.push(`carelink_uploads_total{endpoint="entries"} ${uploadsEntries}`);
   lines.push(`carelink_uploads_total{endpoint="devicestatus"} ${uploadsDevicestatus}`);
+  lines.push(`carelink_uploads_total{endpoint="treatments"} ${uploadsTreatments}`);
   lines.push('');
 
   lines.push('# HELP carelink_token_refreshes_total Total token refresh attempts');
