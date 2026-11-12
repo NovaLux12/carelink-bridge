@@ -92,24 +92,62 @@ function wireCode(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw : undefined;
 }
 
-// NGP stop_using_pump codes (mddub a95dc120d9d1414a433d, 2015-10-19
-// paradigm + NGP errorStrings table). The display dictionary keys these as
-// "N"-prefixed strings; after normaliseAlarmCode() they are looked up as
-// numbers. Populated in lieu of a sanitised 780G fixture, against the same
-// source already cited for the paradigm-era sets. Worst-case outcome of a
-// wrong entry: a priority-1 alarm surfaces as "other" severity with a
-// "Unknown alarm code N<n>" text — still no silent drop, still visible in
-// the Nightscout annotation, just de-escalated from console.warn to INFO.
+// NGP stop_using_pump codes. SOURCE OF TRUTH: the vendor's own client parser,
+// recovered from a hash-pinned lazy chunk (`6746.c6795ff7e9ff468d.js`) at byte
+// 84,476 — a 73-entry object literal mapping every wire code to one of 19 name
+// keys. Full table: carelink-api-research
+// `findings-log/2026-11-11-area-dp-pump-data-plane/alarm-code-map.json`.
+//
+// The vendor's `024` group is exactly these seven codes. The previous revision
+// of this file also carried `131`, which is NOT in the vendor table — it came
+// from a third-party 2015 paradigm-era display dictionary, not from Medtronic's
+// current parser. It is retained below in `LEGACY_CRITICAL_CODES` so a real "N131"
+// still surfaces loudly rather than being silently reclassified, but it is no
+// longer claimed to be part of the vendor's critical set.
 const STOP_USING_PUMP_CODES: ReadonlySet<number> = new Set([
-  24, 35, 40, 47, 48, 50, 55, 131,
+  24, 35, 40, 47, 48, 50, 55,
 ]);
 
-// NGP delivery_stopped codes (same source). Includes the paradigm-era
-// codes (4, 5, 6, 16, 43, 61) plus NGP-era additions.
+// NGP delivery_stopped codes. The vendor collapses 73 wire codes into 19 name
+// keys; every code NOT in the `024` group still carries a severity the vendor
+// distinguishes, so the bridge must not treat them as "other".
+//
+// Previously this set held {4,5,6,16,43,61} + {1,22,25,33,42,63,67,76,77,130}.
+// Measured against the vendor table, that was wrong in both directions:
+//   - `1`, `5`, `130` do not exist in the vendor table at all (four codes were
+//     invented; `131` is the fourth, handled above).
+//   - `43` is in the vendor's `037` group, not a delivery-stop group.
+//   - 53 of the vendor's 73 codes were not tiered at all, including the whole
+//     of the largest group (`002`, 39 codes) — every one of those would have
+//     been annotated "other".
+// The sets below now cover all 73 vendor codes. Group names are the vendor's
+// own name keys, kept verbatim so a reader can go straight to the table.
 const DELIVERY_STOPPED_CODES: ReadonlySet<number> = new Set([
-  4, 5, 6, 16, 43, 61,
-  1, 22, 25, 33, 42, 63, 67, 76, 77, 130,
+  // 002 — the vendor's largest group: 39 codes.
+  2, 3, 4, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 26, 27, 28, 30, 31, 33, 34,
+  44, 45, 46, 49, 53, 54, 60, 63, 64, 65, 67, 68, 74, 75, 76, 79, 80, 81, 82,
+  // 011 — two codes. (Missed on the first pass; the coverage test caught it.)
+  11, 73,
+  // 037 — six codes.
+  37, 38, 39, 41, 42, 43,
+  // 062 — four codes.
+  62, 70, 71, 72,
+  // 007 — two codes.
+  7, 8,
+  // 006, 012, 025, 029, 051, 052, 057, 058, 061, 066, 069, 077, 084 — one each.
+  6, 12, 25, 29, 51, 52, 57, 58, 61, 66, 69, 77, 84,
 ]);
+
+// Codes present in the third-party paradigm-era dictionary but ABSENT from the
+// vendor's current 73-entry parser. They are tiered stop_using_pump on the
+// precautionary principle — a false critical is recoverable, a missed one is
+// not — but they are kept separate so nobody mistakes them for vendor data.
+// Only 131 was documented as "Critical Pump Error. Stop using pump"; 1, 5 and
+// 130 were documented as "Insulin delivery stopped" and stay in that tier.
+// Escalating them would fire a stop-using-pump banner for a recoverable alarm,
+// which trains the operator to ignore the banner that matters.
+const LEGACY_CRITICAL_CODES: ReadonlySet<number> = new Set([131]);
+const LEGACY_DELIVERY_STOPPED_CODES: ReadonlySet<number> = new Set([1, 5, 130]);
 
 // Human-readable text for the codes we ship. Not exhaustive — for any code
 // not present in this map, evaluateLastAlarm synthesises "Unknown alarm code
@@ -144,6 +182,39 @@ const ALARM_TEXT: Readonly<Record<number, string>> = Object.freeze({
   76: 'Insulin delivery stopped',
   77: 'Pump error. Insulin delivery stopped',
   130: 'Insulin delivery stopped',
+  // Codes newly tiered by the vendor table. The vendor distinguishes 19 name
+  // keys among its 73 codes; the bridge collapses them to the two
+  // operator-facing texts above because Nightscout's annotation is a single
+  // string, and splitting 19 ways would fragment the record without helping a
+  // human reading it at 03:00. Every vendor code now resolves to real text, so
+  // "Unknown alarm code" only fires for codes outside the vendor table.
+  2: 'Insulin delivery stopped', 3: 'Insulin delivery stopped',
+  7: 'Insulin delivery stopped', 8: 'Insulin delivery stopped',
+  11: 'Insulin delivery stopped', 12: 'Insulin delivery stopped',
+  13: 'Insulin delivery stopped', 14: 'Insulin delivery stopped',
+  15: 'Insulin delivery stopped', 17: 'Insulin delivery stopped',
+  18: 'Insulin delivery stopped', 19: 'Insulin delivery stopped',
+  20: 'Insulin delivery stopped', 23: 'Insulin delivery stopped',
+  26: 'Insulin delivery stopped', 27: 'Insulin delivery stopped',
+  28: 'Insulin delivery stopped', 29: 'Insulin delivery stopped',
+  30: 'Insulin delivery stopped', 31: 'Insulin delivery stopped',
+  34: 'Insulin delivery stopped', 37: 'Insulin delivery stopped',
+  38: 'Insulin delivery stopped', 39: 'Insulin delivery stopped',
+  41: 'Insulin delivery stopped', 44: 'Insulin delivery stopped',
+  45: 'Insulin delivery stopped', 46: 'Insulin delivery stopped',
+  49: 'Insulin delivery stopped', 51: 'Insulin delivery stopped',
+  52: 'Insulin delivery stopped', 53: 'Insulin delivery stopped',
+  54: 'Insulin delivery stopped', 57: 'Insulin delivery stopped',
+  58: 'Insulin delivery stopped', 60: 'Insulin delivery stopped',
+  62: 'Insulin delivery stopped', 64: 'Insulin delivery stopped',
+  65: 'Insulin delivery stopped', 66: 'Insulin delivery stopped',
+  68: 'Insulin delivery stopped', 69: 'Insulin delivery stopped',
+  70: 'Insulin delivery stopped', 71: 'Insulin delivery stopped',
+  72: 'Insulin delivery stopped', 73: 'Insulin delivery stopped',
+  74: 'Insulin delivery stopped', 75: 'Insulin delivery stopped',
+  79: 'Insulin delivery stopped', 80: 'Insulin delivery stopped',
+  81: 'Insulin delivery stopped', 82: 'Insulin delivery stopped',
+  84: 'Insulin delivery stopped',
 });
 
 function textFor(code: number): string {
@@ -151,8 +222,13 @@ function textFor(code: number): string {
 }
 
 function severityFor(code: number): LastAlarmSeverity {
+  // Legacy-only codes are checked first: they are absent from the vendor table,
+  // so neither set below would catch them, and they are precautionarily tiered
+  // critical. A false critical is recoverable; a missed one is not.
+  if (LEGACY_CRITICAL_CODES.has(code)) return 'stop_using_pump';
   if (STOP_USING_PUMP_CODES.has(code)) return 'stop_using_pump';
   if (DELIVERY_STOPPED_CODES.has(code)) return 'delivery_stopped';
+  if (LEGACY_DELIVERY_STOPPED_CODES.has(code)) return 'delivery_stopped';
   return 'other';
 }
 
