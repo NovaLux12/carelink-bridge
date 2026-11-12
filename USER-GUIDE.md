@@ -14,8 +14,14 @@ If you want to **read or modify** the bridge's code, see
 
 1. Logs into your [Medtronic CareLink](https://carelink.minimed.com/)
    account (the same one you use with the CareLink phone app).
-2. Downloads your latest pump and CGM (sensor) data.
-3. Uploads it to your [Nightscout](http://www.nightscout.info/) site.
+2. Downloads your latest pump and CGM (sensor) data, plus your
+   treatments — meals, boluses and fingersticks — and your pump's
+   SmartGuard auto-mode state.
+3. Uploads all of it to your
+   [Nightscout](http://www.nightscout.info/) site, as three
+   collections: `entries` (glucose), `devicestatus` (reservoir,
+   battery, IOB, auto-mode state, last alarm) and `treatments`
+   (meals, boluses, fingersticks).
 
 Nightscout is a free, open-source website for tracking diabetes
 data. Once your data is there, you (and your chosen tools) can see
@@ -133,9 +139,10 @@ node --version
 npm --version
 ```
 
-You should see two version numbers, both 20 or higher. (npm's
-version is separate from Node's; it ships with Node so they were
-installed together.)
+You should see two version numbers. **Node must be 20 or higher.**
+npm's version is separate and much smaller — npm 10 or 11 on a
+Node 20+ install — so do not compare it to 20; it only needs to
+exist and work.
 
 ## Step 2: Get the bridge code
 
@@ -241,9 +248,9 @@ Before logging in, run:
 npm run doctor
 ```
 
-Expected output on success: a list of green checkmarks (✅)
-or `[ok]` lines, ending with something like "All checks
-passed. The bridge is ready to start." This means:
+Expected output on success: a list of rows marked with a `✓`,
+ending with `All checks passed — ready to run "npm start".`
+(A `!` marks a warning, `✗` a failure.) This means:
 
 - Your `.env` is complete and parseable.
 - CareLink's servers are reachable.
@@ -312,8 +319,14 @@ should see your CGM data appearing. If you don't, see
 The bridge wakes up, checks if it's time to fetch, and:
 
 1. **Reads your tokens** from `logindata.json`.
-2. **Refreshes them if needed.** Tokens last about 30 days;
-   the bridge refreshes them silently in the background.
+2. **Refreshes them if needed.** The access token is short-lived
+   and the bridge refreshes it in the background about 10
+   minutes before it expires — you do not have to do anything.
+   The *refresh* token, stored in `logindata.json`, is the
+   long-lived one (reported as roughly 30 days, though nothing in
+   the bridge guarantees that). If CareLink ever rejects it, the
+   bridge deletes `logindata.json` itself and tells you to run
+   `npm run login` again.
 3. **Calls CareLink's data API** for your latest pump and
    sensor readings.
 4. **Transforms the data** into Nightscout's format.
@@ -331,7 +344,9 @@ The bridge wakes up, checks if it's time to fetch, and:
 ## Settings
 
 All settings go in the `.env` file. Only the first four are
-required — the rest are optional.
+required — the rest are optional. The table below covers the
+settings most people use; the full list of what the bridge reads
+is in `.env.example` and `deploy/systemd/carelink-bridge.env.example`.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -350,6 +365,13 @@ required — the rest are optional.
 | `CARELINK_PATIENT` | *(empty)* | Patient username, only needed if your care-partner account has multiple patients |
 | `CARELINK_DATA_PATH` | `auto` | Which CareLink data route to use. `auto` tries `POST {baseUrlCumulus}/display/message` (the route the modern CareLink Connect app uses, and the one needed for Instinct-era sensors) and falls back to the legacy `monitor/data` / `blePereodicDataEndpoint` / `connect/data` chain if it fails. `cumulus` uses only `display/message` — a failure is then a visible failure rather than a quiet fallback, which is what you want while validating a new device. `legacy` never calls `display/message` (pre-v0.3 behaviour). |
 | `CARELINK_METRICS_PORT` | `0` | `0` = disabled (default, no inbound port). Set e.g. `8081` for a loopback-only observability server (`/healthz` + `/metrics`). |
+| `CARELINK_STATE_FILE` | `<deploy-dir>/state.json` | Where the bridge persists its circuit-breaker and last-success state (mode `600`). Only set this to move the file. |
+| `CARELINK_CIRCUIT_THRESHOLD` | `5` | Consecutive failed fetches before the circuit breaker opens. |
+| `CARELINK_CIRCUIT_COOLDOWN_S` | `60` | Seconds the circuit stays open before a retry is attempted. |
+| `CARELINK_STALE_THRESHOLD_MINUTES` | `15` | Minutes without a successful fetch before the bridge logs a `STALE` warning. |
+| `STALE_WEBHOOK_URL` | *(empty)* | If set, the bridge POSTs a JSON alert to this URL when data goes stale. |
+| `CARELINK_ASSUME_TIMEZONE` | *(empty)* | IANA zone (e.g. `Europe/London`) used when CareLink sends no usable `clientTimeZoneName`. Without it the bridge assumes UTC and every reading is offset. |
+| `CARELINK_APP_VERSION` | `3.8.0` | The request-body `appVersion` sent to `display/message`. Must be ≥ 3.7 — lower values get `206 Upgrade application` and no data. Override only if Medtronic moves the gate. |
 
 After changing any setting, restart the bridge (`Ctrl+C`,
 then `npm start`).
@@ -377,7 +399,7 @@ arguments rather than a fields object, so it does not redact at all.
 The bridge tracks in-memory counters with zero dependencies (`src/metrics.ts`):
 
 - `carelink_fetches_total{result="success|failure"}`
-- `carelink_uploads_total{endpoint="entries|devicestatus"}`
+- `carelink_uploads_total{endpoint="entries|devicestatus|treatments"}`
 - `carelink_token_refreshes_total{result="success|failure"}`
 - `carelink_last_success_timestamp_seconds` (gauge)
 - `carelink_circuit_open` (gauge: 1 = circuit open, 0 = closed)
@@ -402,7 +424,7 @@ If your pump hasn't arrived yet, you can still get everything else ready so data
 
 1. **Bridge host** — `bash deploy/install.sh` on the machine that will run the bridge; create `~/carelink-bridge/.env` from `deploy/systemd/carelink-bridge.env.example`; fill in `CARELINK_USERNAME`, `CARELINK_PASSWORD`, `API_SECRET`, `NS`; `chmod 600 ~/carelink-bridge/.env`; verify with `systemd-analyze --user verify deploy/systemd/carelink-bridge.service`.
 2. **Nightscout** — bring up your Nightscout site and confirm it responds (`curl https://your-nightscout/api/v1/status.json` → `200`); note the exact `NS` URL and `API_SECRET` — they must match the bridge's `.env`.
-3. **Pre-flight without a pump** — `npm run doctor` should show ✅ for `Config (.env)`, `CareLink reachable`, `Nightscout reachable`, and `Nightscout API secret`. `CareLink login` will show `warn` (no pump data yet) — that's expected before pairing.
+3. **Pre-flight without a pump** — `npm run doctor` should show `✓` for `Config (.env)`, `CareLink reachable`, `Nightscout reachable`, and `Nightscout API secret`. `CareLink login (logindata.json)` will show `!` (warn) until you have logged in — expected before pairing, and expected again before you run `npm run login`.
 4. **Day the pump arrives** — pair the pump in the CareLink app, then `cd ~/carelink-bridge && npm run login` (one-time OAuth), `systemctl --user start carelink-bridge`, `journalctl --user -u carelink-bridge -f` and watch for `Fetch succeeded` within ~10 s; check `https://your-nightscout/api/v1/entries.json?count=10` for fresh SGVs.
 
 Full runbook: [deploy/README.md](./deploy/README.md).
@@ -468,8 +490,11 @@ CareLink / Nightscout, wrong API secret) in one command.
 ### Common problems
 
 - **"No logindata.json found"** — Run `npm run login` first.
-- **"Login expired"** — Delete the `logindata.json` file
-  and run `npm run login` again.
+- **"Refresh token rejected. Run "npm run login" to log in again."**
+  — CareLink will no longer accept your stored refresh token
+  (Medtronic has revoked it, or it expired). The bridge has
+  already deleted `logindata.json` for you — do **not** go
+  looking for the file. Just run `npm run login` again.
 - **Data not showing up in Nightscout** — Make sure your
   `NS` URL and `API_SECRET` are correct in the `.env` file.
   Try `npm run doctor` and check the Nightscout checks
@@ -481,10 +506,25 @@ CareLink / Nightscout, wrong API secret) in one command.
   your npm permissions
   (<https://docs.npmjs.com/resolving-eula-permissions-errors>)
   or use nvm to install Node into your home directory.
-- **"No-Auth0 SSO configuration" error** — Your `.env`
-  has the wrong region, or Medtronic has changed their
-  config. Run `npm run doctor`; the error message will
-  name the version string the bridge is pinned to.
+- **`NoAuth0SSOConfigurationError`** — Discovery answered, but the
+  track it points at is not the one this bridge is built against.
+  This is almost always a **wrong discovery app-version pin**, not a
+  region problem: a version tail the server does not key on echoes
+  the request and serves the default document, which declares an
+  older cumulus track with no Auth0 config. The bridge only supports
+  the verified cumulus-v13 family (`android/3.6`, `3.7`, `3.8`).
+  The message names the region, the pinned version and the cumulus
+  track it actually saw, e.g.:
+
+  ```
+  Discovery for region "EU" (pinned app version "android/3.5") declares
+  cumulus ".../connect/carepartner/v11", but this bridge requires the
+  "/connect/carepartner/v13" track. …
+  ```
+
+  If you have changed `MMCONNECT_SERVER`, check that first; otherwise
+  this is a pin/upstream change, so run `npm run doctor` and report
+  the message.
 - **Bridge keeps saying "fetch failed"** — Run with
   `CARELINK_QUIET=false npm start` to see the actual
   errors. The retry policy is documented in
@@ -512,8 +552,13 @@ npm run build
 ```
 
 Then restart the bridge. If you set it up with the systemd
-unit, the `deploy/install.sh` script does all of this and
-reloads the service.
+unit, `deploy/install.sh` does the pull, `npm ci` and the build,
+reloads the systemd manager and re-enables the unit — **but it does
+not restart a running service**. Restart it yourself:
+
+```bash
+systemctl --user restart carelink-bridge
+```
 
 Before a major version (e.g. v0.2.0 → v0.3.0), check the
 [release notes](https://github.com/NovaLux12/carelink-bridge/releases)

@@ -47,14 +47,21 @@ Four things to know before you run either:
 - **It needs `hurl` and `jq`.** A missing tool makes the suite exit non-zero,
   which is *not* the same as drift. `npm run drift:check` separates the two and
   exits 2 with install hints.
-- **It sends live traffic to Medtronic's production servers** — around 60
-  read-only requests across nine hosts, two seconds apart (two of the
-  requests are POSTs, pinned in `04-deep-surface.hurl` and expected to be
-  refused). That is the research repo's deliberate probing budget; running
-  it repeatedly is not free politeness.
+- **It sends live traffic to Medtronic's production servers** — about 106
+  requests across **nine** hosts, two seconds apart. The four `.hurl` suites
+  carry 96 (GET, POST and `OPTIONS` method-probes); the
+  `05-public-config.check.sh` harness adds 10 `curl` calls, and its three hosts
+  are a subset of the nine. Exactly two `.hurl` requests are POSTs —
+  `/oauth/device/code` and `/oauth/revoke` in `04-deep-surface.hurl`, both
+  expected to be refused; everything else is a read or a method-probe, not a
+  write. That is the research repo's deliberate probing budget; running it
+  repeatedly is not free politeness.
 - **A network failure is not drift.** The suite needs live round trips, and a
-  timeout looks identical to a broken assertion. The research repo's own rule is
-  that only two consecutive reds count. Re-run once before believing it.
+  timeout looks identical to a broken assertion. The research repo's own rule
+  — implemented, not just stated, in its
+  `.github/workflows/drift-sweep.yml` ("Flake guard… One retry after a pause;
+  only two consecutive reds are 'drift'") — is that only two consecutive reds
+  count. Re-run once before believing it.
 - **The assertions are pinned to `main`.** If the research repo has moved ahead,
   run it there rather than against a stale clone.
 

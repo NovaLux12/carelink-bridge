@@ -38,7 +38,7 @@ now closed** — `v0.3.0` was tagged and released on 2026-11-12 and
 | v0.1.4 | ✅ | **v0.1.4** (2026-07-19) | Auth retry reliability |
 | v0.1.5 | ✅ | **v0.1.5** (2026-07-19) | Username source fix |
 | v0.1.6 | ✅ | **v0.1.6** (2026-07-19) | `npm run doctor` |
-| v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening + operability |
+| v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening. The operability items (graceful shutdown, stale-data alert) merged five days *after* this tag — see the note in the v0.2.0 section |
 | v0.3.0 | ✅ | **v0.3.0** (2026-11-12) | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 594-test suite |
 | v0.4.0 | ✅ | folded into **v0.3.0** | The observability work (#51, #59) merged before that release and shipped inside it; no separate tag was cut |
 | v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
@@ -97,7 +97,7 @@ in v0.1.3 changes runtime behaviour.
 
 - [x] 401/403 from CareLink now forces a token refresh on the next retry.
 - [x] Token expiry margin widened from 60s to 600s, matching the `carelink-python-client` reference.
-- [x] Carepartner data-endpoint fallbacks are now a known-version list (13, 11, 6, 5) instead of a hardcoded v5/v6 chain.
+- [x] Carepartner data-endpoint fallbacks are now a known-version list (13, 11, 6, 5) instead of a hardcoded v5/v6 chain. *Historical — the list as it stood in v0.1.4; v5 was later dropped and v12 added. Current list is `[13, 12, 11, 6]` (see `BLE_API_VERSIONS` in `src/carelink/client.ts`).*
 
 **Why this exists:** a token invalidated mid-lifetime (most
 commonly by the CareLink phone app logging into the same
@@ -138,9 +138,9 @@ code is non-zero on failure so it can gate a deploy.
 - [x] Refresh-failure classification — `isPermanentRefreshFailure` predicate; the token file is only deleted on a permanent Auth0 failure, not on transport / 5xx / 429 / local-disk errors.
 - [x] Status-aware capped exponential backoff with jitter, honour `Retry-After` — see [ADR 0001](./docs/adr/0001-status-aware-retry-policy.md).
 - [x] Removed `CARELINK_MAX_RETRY_DURATION` env and the related Config / options field / default — the option had no defined unit, the fetch loop never honoured it, and the new retry policy supersedes it.
-- [x] Graceful SIGTERM/SIGINT shutdown — on signal, the request loop finishes the current fetch+upload cycle, then exits 0. 10s force-exit timer prevents hanging. Second signal forces exit. (PR #43, 2026-07-27)
-- [x] Stale-data alert — tracks `lastSuccessTimestamp`; logs a `STALE` warning after `CARELINK_STALE_THRESHOLD_MINUTES` (default 15) with no successful fetch. One-shot per stale period. (PR #43, 2026-07-27)
-- [x] Optional stale webhook — if `STALE_WEBHOOK_URL` is set, POSTs JSON `{bridge, since, threshold_ms}` on stale entry. (PR #43, 2026-07-27)
+- [x] Graceful SIGTERM/SIGINT shutdown — on signal, the request loop finishes the current fetch+upload cycle, then exits 0. 10s force-exit timer prevents hanging. Second signal forces exit. **Merged 2026-07-27 in [PR #43](https://github.com/NovaLux12/carelink-bridge/pull/43) — five days after the `v0.2.0` tag, so v0.2.0 does not contain it.** Verified: `git merge-base --is-ancestor a9d4719 v0.2.0` fails and `git show v0.2.0:src/main.ts` has no `SIGTERM` handler. First released in **v0.3.0**.
+- [x] Stale-data alert — tracks `lastSuccessTimestamp`; logs a `STALE` warning after `CARELINK_STALE_THRESHOLD_MINUTES` (default 15) with no successful fetch. One-shot per stale period. **Same PR #43, post-tag — first released in v0.3.0.** (`git show v0.2.0:src/config.ts` has no stale-threshold key.)
+- [x] Optional stale webhook — if `STALE_WEBHOOK_URL` is set, POSTs JSON `{bridge, since, threshold_ms}` on stale entry. **Same PR #43, post-tag — first released in v0.3.0.**
 
 **Why this exists:** v0.1.x was "make it work." v0.2.0 is
 "make it not silently hurt someone." The mmol/L conversion
@@ -149,17 +149,18 @@ flowing into Nightscout as if it were mg/dL causes
 over-bolus. Everything else in the phase is correctness,
 observability, and attack-surface reduction.
 
-**Maintenance note:** this is the last contribution in the
-current maintenance window. The 780G-payload-fixture items
+**Maintenance note (historical):** v0.2.0 was the last contribution in the
+maintenance window that ended in July 2026, and at that point the
+780G-payload-fixture items
 (`markers[]` for treatments, `therapyAlgorithmState` for
 auto-mode, `limits[]` schedule, multi-patient fan-out,
 NGP-tier alarm codes)
-are deferred until a real pump arrives (currently expected
-November 2026) or another operator contributes sanitised
-fixtures. The token-permission and atomic-write fixes
-shipped here provide the security baseline the deferred
-items will inherit; the discovery-pinning and named-error
-work provides the operational baseline.
+were deferred until a real pump arrived or another operator contributed
+sanitised fixtures. The token-permission and atomic-write fixes
+shipped here provide the security baseline those items inherited; the
+discovery-pinning and named-error work provides the operational baseline.
+**That deferral no longer holds for two of them** — see the correction
+below. Treat this paragraph as the July 2026 position, not the current one.
 
 > **The "needs a real pump" blocker was wrong, and two of these
 > items have now shipped without one (2026-11-11).**
@@ -206,8 +207,10 @@ ones, `PATIENT_DASHBOARD`, `DATA_TABLE` and `SETTINGS_HISTORY`.
 `SensorAndMeterOverview` is **not** an addition — that is the portal's
 enum key for `OVERVIEW`, which is already in the country-settings list.
 Sources are **Pump / Sensor / Meter**, periods are 0/14/30 days and
-2–12 months, and formats are CSV + PDF. Mapping onto the
-deferred items above:
+2–12 months, and formats are CSV + PDF. Mapping onto the items that were
+deferred at the time (two of which — `markers[]` and
+`therapyAlgorithmState` — have since shipped from the vendor parser, so
+those rows are now historical rather than live leads):
 
 | Deferred item | Candidate report |
 |---|---|
@@ -256,7 +259,7 @@ vendor's own client parser (net *fewer* requests than trying to capture a
 pump), so the old "wait for a real 780G" gate was withdrawn — it was
 wrong, not merely inconvenient.
 
-**Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9)
+**Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9) (closed 2026-09-08, `COMPLETED`)
 
 ## v0.4.0 — observability (shipped inside v0.3.0, no separate tag)
 
@@ -278,7 +281,7 @@ that map cleanly to a `reason` label on a metrics counter. The
 `RestrictAddressFamilies=AF_INET AF_INET6` already permits that, so no
 unit change was needed.
 
-**Tracking:** [GitHub issue #10](https://github.com/NovaLux12/carelink-bridge/issues/10)
+**Tracking:** [GitHub issue #10](https://github.com/NovaLux12/carelink-bridge/issues/10) (closed 2026-11-08, `COMPLETED`)
 
 ## v0.5.0 — distribution (partially shipped)
 
@@ -302,7 +305,7 @@ package, or the bridge moves to headless-only login (in
 which case `puppeteer-core` drops from the dependency list —
 see [ADR 0005](./docs/adr/0005-dependency-minimalism.md)).
 
-**Tracking:** [GitHub issue #11](https://github.com/NovaLux12/carelink-bridge/issues/11)
+**Tracking:** [GitHub issue #11](https://github.com/NovaLux12/carelink-bridge/issues/11) (closed 2026-11-08, `NOT_PLANNED`)
 
 ## v0.6.0+ — advanced features (proposed, low priority)
 
@@ -350,6 +353,26 @@ cheapest checks that need a real account token, in order:
    and no pump. The pin's evidence and the family fallback
    (`3.7`/`3.8`) are in
    [carelink-api-research docs/03](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/03-discovery-and-versions.md).
+
+   **Partly answered by a real-account run, not closed.** Issue
+   [#65](https://github.com/NovaLux12/carelink-bridge/issues/65)
+   (closed 2026-10-03, `COMPLETED`) is a report from an operator with a
+   live 780G + Guardian 4 on the EU server running **v0.2.0** — the
+   version that pins `android/3.6` (`git show v0.2.0:src/discovery.ts`).
+   Their login **succeeded**: tokens were written and the bridge fetched
+   and uploaded real data for hours. So discovery → Auth0 → code exchange
+   on the pinned version is *demonstrated*, not inferred, as of
+   2026-09-20. What failed in that report was the **refresh** leg (a 403
+   after the access token expired); that was a bridge predicate bug, fixed
+   in [PR #68](https://github.com/NovaLux12/carelink-bridge/pull/68), and
+   is not evidence of Auth0 drift.
+
+   What #65 does **not** establish: (a) it used the terminal-paste
+   strategy, so the automated (Strategy 1) and browser (Strategy 2) login
+   paths are still unproven against a real account; (b) it is a single run
+   from 2026-09-20 with no recorded run since, so a post-September pin
+   drift would not show up in it. Re-running `npm run login` is still the
+   check; the open question is narrower than it was.
 2. **`GET /api/carepartner/v2/users/me` vs `GET /patient/users/me`.**
    Both answer `401` without a token, so **which one actually returns
    data with a valid token is unknown** — and that is the open question
@@ -385,7 +408,8 @@ blocked on a real pump or a real capture.
 
 ## Tracking
 
-Active open work, cross-referenced from issues:
+Active work, cross-referenced from issues (only #12 is still open; the others
+are listed because their closures are the record of what shipped):
 
 > **Vendor-surface source of truth.** Facts about CareLink itself
 > (which routes exist, which versions answer, what changed since
@@ -395,18 +419,22 @@ Active open work, cross-referenced from issues:
 > pick future work from
 > [docs/11 suggested areas](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/11-suggested-research-areas.md).
 > Its weekly drift sweep opens issues there when the surface
-> moves; bridge issue #76 mirrors the reports-API lead, and
-> #12 tracks what a real token settles.
+> moves. Bridge issue #76 mirrored the reports-API lead and is now closed as
+> `NOT_PLANNED` (the lead lives in the research repo), and #12 tracks what a
+> real token settles.
 
 | Item | Issue | Status |
 |------|-------|--------|
-| Pre-pump operator checklist | [#7](https://github.com/NovaLux12/carelink-bridge/issues/7) | open |
-| v0.3.0 reliability | [#9](https://github.com/NovaLux12/carelink-bridge/issues/9) | closed — shipped in #58 |
-| v0.4.0 observability | [#10](https://github.com/NovaLux12/carelink-bridge/issues/10) | open — items 1 and 2 shipped (#51, #59) |
-| v0.5.0 distribution (remaining) | [#11](https://github.com/NovaLux12/carelink-bridge/issues/11) | proposed |
-| Real-data discoveries tracker | [#12](https://github.com/NovaLux12/carelink-bridge/issues/12) | monitoring after pump arrival |
-| Low-priority repo hygiene | [#13](https://github.com/NovaLux12/carelink-bridge/issues/13) | backlog |
-| Reports API (unintegrated, token-gated) | [#76](https://github.com/NovaLux12/carelink-bridge/issues/76) | candidate source for the deferred 780G fixtures — **not yet achieved** |
+| Pre-pump operator checklist | [#7](https://github.com/NovaLux12/carelink-bridge/issues/7) | **closed 2026-08-20** (`COMPLETED`) — folded into #51 as the checklist section |
+| v0.3.0 reliability | [#9](https://github.com/NovaLux12/carelink-bridge/issues/9) | **closed 2026-09-08** (`COMPLETED`) — shipped in #58; the rest of the phase released as v0.3.0 |
+| v0.4.0 observability | [#10](https://github.com/NovaLux12/carelink-bridge/issues/10) | **closed 2026-11-08** (`COMPLETED`) — items shipped in #51 and #59 and released in v0.3.0 |
+| v0.5.0 distribution (remaining) | [#11](https://github.com/NovaLux12/carelink-bridge/issues/11) | **closed 2026-11-08** (`NOT_PLANNED`) — Dockerfile shipped (#61); published image, static binary and HA add-on went unpursued |
+| Real-data discoveries tracker | [#12](https://github.com/NovaLux12/carelink-bridge/issues/12) | **open** — validation day not yet run |
+| Low-priority repo hygiene | [#13](https://github.com/NovaLux12/carelink-bridge/issues/13) | **closed 2026-07-28** (`COMPLETED`) — done in #45 (Discussions, secret scanning, CI job rename) |
+| Reports API (unintegrated, token-gated) | [#76](https://github.com/NovaLux12/carelink-bridge/issues/76) | **closed 2026-11-08** (`NOT_PLANNED`) — re-homed to [carelink-api-research](https://github.com/NovaLux12/carelink-api-research); **not integrated** |
+
+State as verified with `gh issue view <n> --json state,stateReason,closedAt`
+on 2026-11-12. Only #12 is open.
 
 ## Upstream relationship
 

@@ -38,7 +38,9 @@ trade-off the project should not be making.
   reflects a real bug, not an EOL-runtime quirk.
 - **Easier:** vitest 4 (the supported line) is used. Transitive
   dev-dependency CVEs that were present in vitest 3 are closed
-  by the bump alone.
+  by the bump alone. (Current state: `vitest ^5.1.0` — see the note
+  in "What reverses it". The reasoning is unchanged; only the line number
+  moved.)
 - **Harder:** A user on Node 18 cannot install the bridge without
   upgrading their Node runtime. As of v0.1.1, Node 18 has been
   EOL for ~9 months. The "stuck on Node 18" cohort is small and
@@ -63,6 +65,10 @@ If the situation is reversed, the changes are:
   minimum is desired).
 - CI matrix includes Node 18.
 - Test runner is pinned to a vitest line that supports Node 18.
+  (Today that is `vitest ^5.1.0`, which requires Node 22.12+; it moved
+  `5.x` after the `^4` line this ADR originally landed on. `engines.node`
+  is still `>=20.0.0`, so the runtime floor and the test-runner floor
+  are no longer the same number — see the note below.)
 
 The data flow code does not depend on Node 20 features; the
 constraint is purely about the test runner and dev dependencies.
@@ -70,6 +76,14 @@ The runtime code (`src/`) does not need to change.
 
 ## Notes
 
+- **The test-runner line has moved twice since this ADR was accepted.**
+  `package.json` now pins `vitest ^5.1.0`, whose own `engines.node` is
+  `^22.12.0 || ^24.0.0 || >=26.0.0` — i.e. the *dev* floor is now Node 22.12,
+  while `engines.node` for the shipped package is still `>=20.0.0` and the CI
+  matrix is still `[20, 22]`. Node 20 can install and run the bridge but
+  cannot run the suite. Left as-is deliberately (the matrix is the contract
+  for the shipped code, not for contributors), and recorded here so nobody
+  derives the wrong conclusion from the two numbers disagreeing.
 - Node release schedule: <https://nodejs.org/en/about/previous-releases>
 - The 9-month EOL-to-removal window in this ADR is a judgment
   call, not a rule. A future maintainer who wants to lengthen or

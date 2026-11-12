@@ -703,8 +703,13 @@ function deviceIdentity(
  * documented vocabulary (`GUARDIAN` / `NGP` / `CGM` / `CC`) and the spellings
  * `isBleDevice()` matches (`BLE…`, `SIMPLERA…`) may not overlap at all, and
  * `CC` reportedly covers Instinct. Rather than widen the matcher on a guess,
- * log the identity keys that are present — values included, since a device
- * family name is not a secret — so the widening can be made on evidence.
+ * log the identity keys that are present — values included — so the widening
+ * can be made on evidence.
+ *
+ * ⚠ This output is NOT redacted. A family/model string is harmless, but
+ * `deviceSerialNumber` sits in the same key list and is written to the log
+ * verbatim whenever the payload carries it. Anyone pasting this line into a
+ * public issue must strip that key first — the validation-day doc says so.
  *
  * Deliberately enumerates a fixed key list instead of dumping the payload:
  * the response also carries glucose readings and alarm history, which have no
