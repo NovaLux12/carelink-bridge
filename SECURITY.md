@@ -95,6 +95,18 @@ The CI does not run `npm audit`; Dependabot is the source
 of truth for vulnerability detection. The rationale is in
 [ADR 0006](./docs/adr/0006-no-npm-audit-in-ci.md).
 
+## Supported versions
+
+| Version | Supported | Notes |
+|---------|-----------|-------|
+| **v0.3.x** | ✅ | Current — pump treatments, SmartGuard auto-mode, corrected alarm tiers |
+| v0.2.x and older | ❌ | No fixes will be backported |
+
+The project is pre-1.0 and releases are infrequent, so **only the latest tagged
+release gets security fixes**. There is no long-term-support branch. If you are
+running something older, the fix is to upgrade rather than to expect a patch —
+`git tag` is the authoritative list of what was ever released.
+
 ## Update discipline
 
 Security-relevant changes will get a patch release
