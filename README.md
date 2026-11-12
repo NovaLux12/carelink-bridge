@@ -10,6 +10,21 @@ Sends your Medtronic pump and CGM data to [Nightscout](http://www.nightscout.inf
 automatically, by logging into Medtronic's CareLink servers and
 uploading what it gets.
 
+**What actually reaches Nightscout** — three collections:
+
+| Nightscout collection | From CareLink | Gives you |
+|---|---|---|
+| `entries` | `sgs[]`, `lastSG` | The CGM trace |
+| `devicestatus` | reservoir, battery, IOB, `lastAlarm`, `therapyAlgorithmState` | Pump state, **SmartGuard auto-mode**, last alarm |
+| `treatments` | `markers[]` | **Meals, boluses, fingersticks** |
+
+That third row is the one that matters if you have a pump: CareLink
+records every meal, bolus and fingerstick in `markers[]`, and a bridge
+that drops them leaves Nightscout looking like a CGM with no insulin
+history. Treatments carry a deterministic `_id`, so CareLink's rolling
+re-send **updates** an existing record instead of appending a duplicate
+meal every poll.
+
 > **Medtronic publishes no API documentation.** The surface this bridge talks to
 > is reverse-engineered, and the map of it lives in a separate, continuously
 > re-verified repo: **[NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research)**

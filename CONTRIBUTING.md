@@ -134,7 +134,17 @@ which finding each source comment rests on.
 Version metadata must stay in sync — v0.1.1 through v0.1.3
 shipped without bumping `package.json`, which is how
 [#17](https://github.com/NovaLux12/carelink-bridge/issues/17)
-happened. For every release:
+happened.
+
+**The same drift happened again, in a worse form.** The v0.3.0 and v0.4.0 *code*
+merged over months while `package.json` stayed at `0.2.0` and no tag was cut, so
+`ROADMAP.md` said "Shipped 2026-09-09" for a version that did not exist anywhere
+in git or on the releases page. Anyone reading the roadmap to decide what they
+were running was misled. The rule that follows from it: **"shipped" means a tag
+exists.** If the code is on `main` but untagged, the roadmap must say so in those
+words, and cutting that tag is the next release's job.
+
+For every release:
 
 1. Bump `version` in `package.json` and run
    `npm install --package-lock-only` to sync the lockfile.

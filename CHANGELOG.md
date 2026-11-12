@@ -12,6 +12,32 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.0] — 2026-11-12
+
+**This release is the one that carries the pump data.** Before it, the bridge
+reached Nightscout as a CGM with no insulin history: `markers[]` — every meal,
+bolus and fingerstick — was parsed and thrown away. It also pulled the
+observability and reliability work that had merged but was never tagged
+(v0.3.0/v0.4.0 in `ROADMAP.md`), which is why this release closes both.
+
+Headline changes:
+
+- **Pump events become Nightscout treatments** — `markers[]` → `Meal Bolus`,
+  `Correction Bolus`, `Carb Correction` and `BG Check`, with a deterministic
+  `_id` so CareLink's rolling re-send updates rather than duplicates (#123).
+- **SmartGuard auto-mode becomes devicestatus** — `therapyAlgorithmState` →
+  `pump.autoMode` with `shieldState`, `plgmState` and `suspendFired` (#123).
+- **Alarm tiering corrected against the vendor's own table** — the model had
+  been built from a third-party dictionary and left **53 of the vendor's 73
+  codes** logging at INFO instead of raising the WARN (#128).
+- **Circuit breaker, persistent state, structured logs, `/healthz` + `/metrics`**
+  — merged earlier, released here.
+
+590 tests across 39 files. `npm run drift:check` green: 85 vendor assertions, 0
+failed. The entries below carry the full detail.
+
 ### Publish pump events as Nightscout treatments, and SmartGuard auto-mode as devicestatus (#123)
 
 The bridge posted two Nightscout documents per fetch — `entries` and
@@ -704,7 +730,8 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.4...v0.1.5

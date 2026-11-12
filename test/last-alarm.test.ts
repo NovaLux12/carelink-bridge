@@ -279,6 +279,7 @@ describe('safety contract: no ALARM reaches /api/v1/treatments in src/', () => {
   // fails if any of them mentions an alarm.
   const TREATMENTS_FILES = [
     'src/main.ts',
+    'src/metrics.ts',
     'src/transform/index.ts',
     'src/transform/treatments.ts',
     'src/types/nightscout.ts',
