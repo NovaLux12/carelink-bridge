@@ -35,14 +35,14 @@ Headline changes:
 - **Circuit breaker, persistent state, structured logs, `/healthz` + `/metrics`**
   — merged earlier, released here.
 
-590 tests across 39 files. `npm run drift:check` green: 85 vendor assertions, 0
+594 tests across 40 files. `npm run drift:check` green: 85 vendor assertions, 0
 failed. The entries below carry the full detail.
 
 ### Publish pump events as Nightscout treatments, and SmartGuard auto-mode as devicestatus (#123)
 
-The bridge posted two Nightscout documents per fetch — `entries` and
-`devicestatus` — and silently discarded `markers[]`, which is where CareLink
-puts every meal, bolus and fingerstick. A working pump therefore reached
+Before this change the bridge posted two Nightscout documents per fetch —
+`entries` and `devicestatus` — and silently discarded `markers[]`, which is where
+CareLink puts every meal, bolus and fingerstick. A working pump therefore reached
 Nightscout as a CGM with no insulin history. The research repo calls this the
 single largest "available but unused" gap, and `ROADMAP.md` had it deferred
 until "a real pump arrives".
