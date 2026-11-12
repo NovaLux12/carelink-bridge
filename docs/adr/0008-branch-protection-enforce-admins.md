@@ -16,7 +16,7 @@ commit that:
 
 - Bypasses the PR review process. No description, no diff link,
   no conversation record of why the change was made.
-- Bypasses CI. The required checks (`test (20)`, `test (22)`) do
+- Bypasses CI. The required checks (`ci (20)`, `ci (22)`) do
   not run on direct pushes.
 - Has a different audit trail than a merged PR. GitHub's UI
   surfaces "X pushed to main" instead of "X merged PR #N."
@@ -30,7 +30,9 @@ branch protection for this reason.
 
 Branch protection on `main` is enabled with `enforce_admins: true`.
 Every change to `main` goes through a PR. CI is required (currently
-contexts `test (20)` and `test (22)`).
+contexts `ci (20)` and `ci (22)` — they take their name from the job id
+`ci` in `.github/workflows/ci.yml`, which is why they are not called
+`test`).
 
 The `enforce_admins` flag is the load-bearing part. GitHub allows
 admins to bypass protection by default; `enforce_admins: true`

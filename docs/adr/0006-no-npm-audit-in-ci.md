@@ -12,10 +12,13 @@ therefore tempting to add an `npm audit` step to CI to catch
 vulnerable dependencies before they reach `main`.
 
 CI currently runs `tsc --noEmit` + `vitest run` on Node 20 and
-Node 22. The maintainer also has Dependabot security updates
-enabled (`.github/dependabot.yml`), with weekly runs plus immediate
-runs on any CVE publication for any ecosystem dependency, capped
-at 5 open PRs.
+Node 22. The maintainer also has Dependabot (`.github/dependabot.yml`)
+covering **both** ecosystems it configures — `npm` and `github-actions` —
+on weekly runs. The `open-pull-requests-limit: 5` cap is set on the
+**npm** block only; the `github-actions` block has no cap of its own and
+inherits Dependabot's default (5). CVE-triggered *security* updates are a
+repository setting rather than a `dependabot.yml` key, so this file cannot
+attest to them.
 
 ## Decision
 
@@ -58,7 +61,9 @@ CVE), not a single missed update.
   that `npm audit --watch` would approximate; the trade-off is
   that Dependabot is one-way (it files a PR; it does not block
   a PR).
-- The `open-pull-requests-limit: 5` cap means a CVE storm (a
+- The `open-pull-requests-limit: 5` cap (npm block; the
+  `github-actions` block is uncapped and falls back to the default of 5)
+  means a CVE storm (a
   transitive dep with a major regression) can queue PRs. The
   CI does not need to be aware of this — Dependabot manages the
   queue; the security review happens at PR open time.

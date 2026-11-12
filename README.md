@@ -45,7 +45,9 @@ meal every poll.
 > official app calls `/api/carepartner/v2/*`, this bridge calls bare
 > `/patient/*`. Both answer `401` without a token, so which one
 > actually returns data with a valid token is **unverified** — it is
-> the first authenticated check in [ROADMAP.md](./ROADMAP.md).
+> the second of the two authenticated checks in
+> [ROADMAP.md](./ROADMAP.md#pre-pump-authenticated-checks-cheapest-first)
+> (`npm run login` is the first).
 > Live-probed 2026-10-08; host and namespace details in
 > [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#live-carelink-api-surface).
 

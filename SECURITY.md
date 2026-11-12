@@ -139,27 +139,45 @@ of these, the ADR is the place to start the conversation.
 
 ## Operational security
 
-- **The OAuth tokens in `logindata.json` are valid for
-  ~30 days** and are refreshed automatically using the
-  refresh token. If the refresh token expires (or the
-  Auth0 tenant rotates it), you need to re-run
-  `npm run login`.
+- **The OAuth tokens in `logindata.json` are refreshed automatically
+  using the refresh token**; you only need to re-run `npm run login`
+  if the refresh token itself dies (revoked, tenant rotation, or a
+  permanent 4xx — see the rule below). **Their lifetime is not
+  documented here**: it is whatever the JWT `exp` claim says, which the
+  bridge reads rather than assumes. Whether a refresh token survives
+  ~30 days of continuous uptime is **untested** — `docs/validation-day-instinct.md`
+  lists it as an open question, so treat any "~30 days" figure as an
+  unverified expectation, not a guarantee.
 - **A 401 / 403 from CareLink forces a token refresh on
   the next retry** rather than waiting for natural
   expiry. This is the v0.1.4 fix.
-- **A permanent Auth0 refresh failure** (HTTP 400 +
-  `invalid_grant` / `invalid_client`) deletes
-  `logindata.json` and forces a re-login. Recoverable
-  failures (5xx, 429, transport, local disk) retain the
-  file so the next fetch cycle can re-attempt refresh.
-  See
-  [ADR 0003](./docs/adr/0003-atomic-token-write.md) and
-  the `isPermanentRefreshFailure` predicate in
+- **A permanent Auth0 refresh failure deletes `logindata.json` and
+  forces a re-login.** The rule is **any 4xx from the refresh endpoint
+  with no `Retry-After` header** — not just `HTTP 400` with
+  `invalid_grant` / `invalid_client`. Auth0 also returns `401`/`403`
+  with an *empty body* when a refresh token is revoked out of band
+  (the usual trigger: logging into the same CareLink account on the
+  phone app), and those were previously misclassified as recoverable,
+  leaving the bridge in an infinite refresh loop until a human
+  re-logged in. That was
+  [issue #65](https://github.com/NovaLux12/carelink-bridge/issues/65),
+  fixed in
+  [PR #68](https://github.com/NovaLux12/carelink-bridge/pull/68).
+  Recoverable failures — 5xx, and 4xx that carries `Retry-After`,
+  plus transport and local-disk errors — retain the file so the next
+  fetch cycle can re-attempt refresh.
+  See [ADR 0003](./docs/adr/0003-atomic-token-write.md) and the
+  `isPermanentRefreshFailure` predicate in
   `src/refresh-failure.ts`.
 - **The systemd unit runs the bridge with `NoNewPrivileges`,
   `ProtectSystem=strict`, `RestrictAddressFamilies=AF_INET
-  AF_INET6`, and a directory-scoped `ReadWritePaths=`.** No
-  inbound network listeners; outbound traffic is limited to
-  CareLink and Nightscout. See
+  AF_INET6`, and a directory-scoped `ReadWritePaths=`.** The bridge is a
+  network *client*: its outbound traffic is CareLink plus your
+  Nightscout. It opens **no listener by default**. The one exception is
+  opt-in and loopback-only: setting `CARELINK_METRICS_PORT` to a
+  non-zero port starts an observability server on `127.0.0.1`
+  (`src/observe-server.ts`) serving `/healthz` and `/metrics`. It binds
+  no other interface, is off unless that variable is set, and a listen
+  failure is logged and ignored rather than fatal. See
   [deploy/README.md](./deploy/README.md#hardening) for the
   full hardening table.

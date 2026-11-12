@@ -25,7 +25,7 @@ is to answer three questions and write the answers down:
 ```bash
 npm ci
 npm run typecheck
-npm test          # expect 342 passing across 26 files (v0.2.0 + #111)
+npm test          # expect 594 passing across 40 files
 npm run doctor
 ```
 
@@ -42,14 +42,25 @@ three fail, that is a real finding — file it on the placeholder issue.
 
 ## Step 2 — read the identity line FIRST
 
-As of #111 the client logs a redacted device-identity line on every monitor
-fetch, once per distinct shape:
+As of #111 the client logs a device-identity line on every monitor fetch, once
+per distinct shape:
 
 ```
 Device identity from monitor/data (patient): {"deviceFamily":"…","deviceModel":"…","sensorModel":"…"} (BLE match: yes|NO)
 ```
 
-**This one line answers question 1.** Copy it verbatim into the issue.
+**This one line answers question 1.**
+
+> ⚠ **That line is NOT redacted.** The bridge prints the *values* of every
+> identity key it finds, and `deviceSerialNumber` is one of those keys
+> (`DEVICE_IDENTITY_KEYS` in `src/carelink/client.ts`) — so a pump serial number
+> appears in the log verbatim whenever CareLink sends it. The bridge already
+> writes your pump serial to Nightscout server-side, so it is not a credential,
+> but it is a persistent hardware identifier you should not publish.
+>
+> Before pasting the line into a public issue, **delete the
+> `"deviceSerialNumber":"…"` pair** (and anything else you would not put on a
+> public page). Paste the rest, and say that you stripped the serial.
 
 ### Step 2b — read the payload census line
 
@@ -101,7 +112,7 @@ covering Instinct) and the spellings the matcher accepts (`BLE…`, `SIMPLERA…
 ## Step 3 — confirm which endpoint answered
 
 ```bash
-journalctl -u carelink-bridge -f | grep -Ei 'GET data|BLE endpoint|identity|connect/data'
+journalctl --user -u carelink-bridge -f | grep -Ei 'GET data|BLE endpoint|identity|connect/data'
 ```
 
 Which of these appears tells you the path:
@@ -125,9 +136,11 @@ Do not widen `isBleDevice()` on a guess. Routing a non-BLE device down the BLE
 endpoint is its own silent failure. Instead:
 
 1. Save the identity line and the endpoint that answered.
-2. Capture **one** full payload, redacted, into `test/fixtures/` — see
-   `docs/vendor-api/README.md` for where fixtures belong. Strip `access_token`,
-   `refresh_token`, `username`, `patientId`, and any serial numbers.
+2. Capture **one** full payload, redacted, into `test/fixtures/` (that
+   directory exists — it currently holds `alarm-code-map.json`; create
+   a new file there, do not overwrite the existing one). Strip
+   `access_token`, `refresh_token`, `username`, `patientId`, and any
+   serial numbers — including `deviceSerialNumber`.
 3. Only then decide, with the real family string in hand, whether the fix is:
    - add the family to `BLE_FAMILY_TOKENS` (exact-token match), or
    - add the model prefix to `BLE_DEVICE_MODELS`, or
@@ -188,11 +201,16 @@ The residual risks that remain genuine:
    `hasPayload()` guards the sibling-host case, but a genuinely empty body from
    the configured host is returned as-is (deliberate — it preserves single-host
    behaviour). Watch for entries landing as zero.
-2. **Pump clock offset.** `src/transform/pump-offset.ts` infers the offset from
-   `pumpTime` minus `serverTime`, rounded to a quarter hour. If SGV timestamps
-   look skewed by whole or half hours, this is the suspect. `relativeOffset` is
-   typed on `CareLinkSG` (#85) but **not yet consumed** — it is the better
-   input if the guess turns out wrong.
+2. **Pump clock offset.** `src/transform/pump-offset.ts` infers the offset by
+   subtracting the server clock from the device clock, newest pair first:
+   `lastConduitDateTime` minus `lastConduitUpdateServerDateTime` (the
+   `display/message` shape, what xDrip's `correctTimeInDisplayMessage()`
+   reads), falling back to `sMedicalDeviceTime` minus `currentServerTime`
+   (the legacy pair). The delta is rounded to a quarter hour and rejected
+   outright if it exceeds 26 h. If SGV timestamps look skewed by whole or
+   half hours, this is the suspect. `relativeOffset` is typed on `CareLinkSG`
+   (#85) but **not yet consumed** — it is the better input if the guess turns
+   out wrong.
 3. **Token refresh under continuous operation.** Refresh is reactive (within
    ~1 min of expiry). Whether the refresh_token survives ~30 days of uptime is
    untested. A 4xx from refresh without `Retry-After` is treated as permanent.

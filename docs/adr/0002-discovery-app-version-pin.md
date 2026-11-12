@@ -185,7 +185,7 @@ journald and points the operator at the constant to inspect.
   Auth0 **and** cumulus v13 (today: 3.6 / 3.7 / 3.8), or by Medtronic
   moving the Auth0 track off cumulus v13 entirely — in which case the
   data endpoint's version fallback list in `src/carelink/client.ts`
-  (`[13, 11, 6, 5]`) has to move with it, and that is a code change, not
+  (`[13, 12, 11, 6]`) has to move with it, and that is a code change, not
   a constant change.
 - If Medtronic ships a version that returns a structurally different
   Auth0 config (e.g. different field names, different OAuth flow),

@@ -27,7 +27,9 @@ The discovery document resolves **different API generations by the app-version p
 |---|---|---|---|
 | `3.5` | `/connect/carepartner/v11` | `/api/carepartner/v2` | yes |
 | `3.6` – `3.8` | **`/connect/carepartner/v13`** | `/api/carepartner/v2` | yes |
-| `3.9`, `3.10`, `3.9.1`, `4.0`, `4.1`, `5.0` | **`/connect/carepartner/v2`** | `/api/carepartner/v1` | **no** — falls back to legacy `SSOConfiguration`, no `Auth0SSOConfiguration` key |
+| `3.9`, `3.10`, `3.9.1`, `4.0`, `4.1`, `5.0` (and any unkeyed tail) | **`/connect/carepartner/v2`** — *the fallback document, not a per-version answer* | `/api/carepartner/v1` | **no** — falls back to legacy `SSOConfiguration`, no `Auth0SSOConfiguration` key |
+
+⚠ **Read row 3 carefully: those tails are not keyed.** Only `3.4`–`3.8` are keyed among the tails probed. For an unkeyed tail the server **echoes the request string and serves the same default document** — a fabricated tail and `99.99` return that document byte-identically. So "`4.0` → v2" is a statement about the *fallback document*, not about version 4.0. Verified in `src/discovery.ts` (`DISCOVERY_TAIL_TRACKS`).
 
 (OBSERVED — fetched all cells 2026-11-08; the high-version fallback is an inversion trap: asking for a *newer* app version yields an *older* API.) **CONFIDENCE: high.**
 

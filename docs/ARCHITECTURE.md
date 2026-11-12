@@ -11,13 +11,13 @@ see [CONTRIBUTING.md](../CONTRIBUTING.md).
 flowchart LR
   subgraph ext["External systems"]
     CL["Medtronic CareLink Cloud<br/>(OAuth + data APIs)"]
-    NS["Operator's Nightscout<br/>(sgv + devicestatus endpoints)"]
+    NS["Operator's Nightscout<br/>(sgv + devicestatus + treatments endpoints)"]
   end
   subgraph bridge["carelink-bridge (this project)"]
     direction TB
     LOGIN["login.ts<br/>(3 OAuth strategies)"]
     FETCH["carelink/client.ts<br/>(fetch loop, retry, refresh)"]
-    TRANSFORM["transform/index.ts<br/>(SGV, devicestatus, alarms)"]
+    TRANSFORM["transform/index.ts<br/>(SGV, devicestatus, alarms, treatments)"]
     UPLOAD["nightscout/upload.ts<br/>(POST with API secret)"]
   end
   CL -- "OAuth2 / PKCE<br/>tokens in logindata.json" --> LOGIN
@@ -90,15 +90,19 @@ src/
 
 ### Where to start as a new contributor
 
-1. `src/main.ts` — the **fetch loop**. 80 lines, three functions, the
-   whole top-level flow. Read this first.
+1. `src/main.ts` — the **fetch loop**. 321 lines, eight top-level
+   functions (`persistState`, `fireStaleWebhook`, `checkStale`,
+   `handleShutdown`, `sleep`, `uploadIfNew`, `requestLoop`,
+   `ensureLogin`), the whole top-level flow. Read this first.
 2. `src/carelink/client.ts` — the **CareLinkClient class**. The
    `fetch()` method is the entry point; `authenticate()` is the
    refresh logic; the private `fetchAsCarepartner` / `fetchAsPatient`
-   / `fetchBleDeviceData` are the three data-fetch branches.
+   / `fetchBleDeviceData` / `fetchConnectData` are the data-fetch
+   branches (four, counting the legacy `connect/data` fallback).
 3. `src/transform/index.ts` — the **data model transformation**.
-   `transform(data, sgvLimit)` is the only exported function; the
-   rest are helpers.
+   `transform(data, sgvLimit)` is the main export; the module also
+   exports `describeAutoMode(therapy)` and the `AutoModeSnapshot`
+   interface it returns. The rest are module-private helpers.
 
 ## End-to-end data flow
 
@@ -117,7 +121,7 @@ sequenceDiagram
   Main->>Main: ensureLogin() — does logindata.json exist?
   alt No logindata.json
     Main->>Login: login(isUS, user, pass)
-    Login->>CL: GET discovery (DRYRUN URL with android/3.6)
+    Login->>CL: GET discovery (v13 track, android/3.6)
     CL-->>Login: Auth0SSOConfiguration
     Login->>CL: OAuth2 / PKCE (one of 3 strategies)
     CL-->>Login: access + refresh tokens
@@ -145,10 +149,13 @@ sequenceDiagram
 
 ### Recency filter
 
-`src/filter.ts` exports `makeRecencyFilter(getKey)`, which returns
+`src/filter.ts` exports `makeRecencyFilter<T>(timeFn, options?)` — the
+generic parameter is inferred from the accessor you pass — which returns
 a function that takes an array of items and returns only items
 whose key (date or timestamp) is newer than the highest key
-previously seen. This is in-memory state — it does not persist
+previously seen. `options` carries `label` (for log lines),
+`now`, `maxFutureMs` (future-dated readings are forwarded once, not
+indefinitely) and `stallResetMs`. This is in-memory state — it does not persist
 across restarts. On restart, the bridge re-uploads the last 24 SGVs
 (`CARELINK_SGV_LIMIT=24` default), and Nightscout de-duplicates by
 date+sgv. So a restart costs at most one duplicate upload, not
@@ -167,11 +174,16 @@ the device family:
    no version fallback.
 2. **Carepartner standard branch** (`fetchAsCarepartner`, when the
    monitor check finds no BLE device) — hits the carepartner data
-   endpoint at a known list of API versions (`[13, 11, 6, 5]` in
-   `src/carelink/client.ts`, via `buildEndpointCandidates()`) and
-   tries them newest-first. The version list is the historical set
-   of Medtronic cumulus versions this code has been verified
-   against.
+   endpoint at a known list of API versions (`[13, 12, 11, 6]` as
+   `BLE_API_VERSIONS` in `src/carelink/client.ts`, via
+   `buildEndpointCandidates()`) and tries them newest-first. `v5` is
+   **deliberately excluded and must not come back**: `/connect/carepartner/v5/...`
+   answers 403 at the router's no-route body (not an auth gate), so it can
+   only ever cost a request. `v12` is a candidate rather than a verified
+   backend — one request on a path already reached only when `v13` failed,
+   the same standing `v11` has. `v6` is POST-only (`GET` is 403, `OPTIONS`
+   is 200), which is fine because this bridge POSTs; it is last because it
+   is the version the country config hands out and can answer with stale data.
 3. **Patient monitor branch** (`fetchAsPatient`) — used for the
    patient's own account (not care-partner). Hits
    `/patient/monitor/data`.
@@ -351,10 +363,10 @@ read it before relying on anything below:
 
 - **`/patient/v2/configuration/public` is unauthenticated** and carries 69 keys, including the complete device-family vocabulary. Nothing below knows about it.
 - **`/patient/v2/monitor/data` is live, 405 POST-only**, and `/patient/v2/users/me` is 401 — the v2 tree is a real data plane, not just config.
-- **`/patient/reports/*` is live on `carelink.minimed.eu`**, so the reports surface behind issue #76 is not `commoncore`-only. `commoncore.medtronic.*` now returns a CloudFront **502 "could not resolve the origin domain name"** — an origin DNS failure, not an absence.
+- **`/patient/reports/*` is live on all three patient deployments** — `carelink.minimed.eu`, `carelink.minimed.com` **and** `carelink-trials.minimed.com`, with no region split and byte-identical responses across hosts — so the reports surface behind issue #76 is not `commoncore`-only. `commoncore.medtronic.*` now returns a CloudFront **502 "could not resolve the origin domain name"** — an origin DNS failure, not an absence.
 - **There is a patient-facing client** on `carelink.minimed.eu` / `carelink-support.minimed.eu` with 70 `/patient/*` endpoints not in the clinician bundle, and the clinician bundle now replicates across **five** hosts.
 - **`/patient/countries` (117 countries) and `/patient/languages`** answer unauthenticated.
-- **The 16-family vocabulary is published**, and the vendor's own patient app matches on five tokens (`BLE`, `BLE_X`, `SIMPLERA`, `SIMPLERA_X`, `GUARDIAN`) via `startsWith` — `CC880` is not among them. See [`docs/05-devices-and-vocabulary.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/05-devices-and-vocabulary.md).
+- **The 16-family vocabulary is published**, and the vendor's own patient app *declares* **five** tokens (`BLE`, `BLE_X`, `SIMPLERA`, `SIMPLERA_X`, `GUARDIAN`) but passes only **three** to `startsWith` — `BLE`, `SIMPLERA`, `GUARDIAN`; `BLE_X` and `SIMPLERA_X` are inert, since `"BLE_X".startsWith("BLE")` already holds. `CC880` is not among them. This bridge's matcher is deliberately wider (normalised `BLE`/`SIMPLERA` prefixes plus the exact published token `CC880`) because it must classify, not mirror the app's read. See [`docs/05-devices-and-vocabulary.md`](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/05-devices-and-vocabulary.md).
 
 
 Everything in this section was **verified live on 2026-10-08** against
@@ -420,7 +432,8 @@ duplicate of the `minimed.*` tenant.
 | `/patient/countries/settings?…` | **200** (public) | 403 |
 | `/patient/configuration/system/…` | **200** (public) | 403 |
 | `/api/carepartner/v2/{users/me,links/patients}` | **401** | — |
-| `/connect/carepartner/{v6,v11,v13}/display/message` | — | **401** `Authentication failure` |
+| `/connect/carepartner/{v11,v13}/display/message` | — | **401** `Authentication failure` |
+| `/connect/carepartner/v6/display/message` (GET) | — | **403** — POST-only (`OPTIONS` 200), not an auth gate |
 | `/connect/pde/v3/*` | — | **403** `Missing Authentication Token` |
 
 **Reading:** the *metadata* endpoints live only on `carelink.*`; the
@@ -598,12 +611,17 @@ token.** Recorded here because it is the most promising lead for the
 `commoncore.medtronic.{eu,com}` serves a reports API
 (`reports-broker/v1/ocl`, `reports-metadata/v1/ocl`) with CSV and PDF
 output over the same account. The report catalogue is discoverable
-without a token: country-settings advertises `supportedReports` — 11 for GB/
-DE/IE/NL and 10 for AU/US/FR/NZ (`INSULIN_ASSESSMENT` is the one that varies)
-— and
-the vendor's portal bundle enumerates 14. The 14 are those 11 plus three
-portal-only types — `PATIENT_DASHBOARD`, `DATA_TABLE` and
-`SETTINGS_HISTORY`; the mapping onto the deferred fixture items is in the
+without a token: country-settings advertises `supportedReports` — 11 codes
+for GB/DE/IE/NL/**AU** and 10 for US/FR/NZ (`INSULIN_ASSESSMENT` is the one
+that varies; AU carries it, so it is not a plain EU/rest split) — and
+the vendor's portal bundle enumerates **14** report-type enum members
+(Dashboard, EpisodeSummary, Adherence, SensorAndMeterOverview, Logbook,
+DeviceSettings, DailyDetails, AssessmentAndProgress, WeeklyReview,
+BolusWizardFoodBolus, InsulinAssessment, DataTable, PatientDashboard,
+SettingsHistory — verbatim from the portal bundle's enum). The last three —
+`DATA_TABLE`, `PATIENT_DASHBOARD`, `SETTINGS_HISTORY` — are the three with no
+`supportedReports` counterpart. How far the portal's enum maps onto the
+deferred fixture items is **INFERRED** and is tracked in the
 [v0.2.0 maintenance note](../ROADMAP.md).
 
 Verified live: the host resolves and is gateway-gated — unauth 403, a
@@ -673,11 +691,16 @@ The full mapping is in `src/transform/index.ts`. Notable details:
   test pinning the new behaviour in `test/pump-offset.test.ts`.
 - **Last alarm.** `src/last-alarm.ts` converts the most recent
   CareLink alarm into a `NightscoutLastAlarmAnnotation` on the
-  device status entry. Priority-1 paradigm codes (4, 5, 6, 16, 43,
-  61) hit `console.warn` always-on, irrespective of verbose
-  mode. There is no alarm relay to Nightscout's
-  `/api/v1/treatments.json` (verified by an absence-grep test
-  over `src/`).
+  device status entry. All 73 vendor codes are tiered into three
+  severities — `stop_using_pump`, `delivery_stopped`, `other` — read from
+  the vendor's own parser table and pinned by `test/alarm-vendor-table.test.ts`
+  against `test/fixtures/alarm-code-map.json`. **Both** critical tiers
+  (`stop_using_pump` *and* `delivery_stopped`) go to `console.warn`,
+  always-on irrespective of verbose mode; only `other` is routed through
+  the verbose logger. There is no alarm relay to Nightscout's
+  `/api/v1/treatments.json`: the safety test scopes that ban to alarms
+  rather than to the endpoint, because treatments are now legitimately
+  posted from `markers[]`.
 
 ### Stale-data threshold
 
@@ -691,13 +714,14 @@ review.
 
 ## Error and retry semantics
 
-There are three independent error-handling modules:
+There are four independent error-handling modules:
 
 | Module | Responsibility | Key export |
 |--------|----------------|------------|
 | `src/carelink/client.ts` `authenticate()` | Token refresh on 401/403; the `forceRefresh` flag survives successive 401s. | `(private) authenticate(forceRefresh): Promise<boolean>` |
 | `src/retry-policy.ts` | Status-aware retry classification (fail-fast for permanent 4xx, `Retry-After` for 429, jittered backoff for 5xx and transport). | `decideRetry(error, options): RetryDecision` |
 | `src/refresh-failure.ts` | Distinguishes permanent Auth0 refresh failures (HTTP 400 + `invalid_grant` / `invalid_client`) from recoverable ones (5xx, 429, transport, local-disk). | `isPermanentRefreshFailure(error): boolean` |
+| `src/circuit-breaker.ts` | Closed/open/half-open breaker over consecutive fetch failures: opens after the threshold, short-circuits while open, allows one probe after the cooldown. | `CircuitBreaker` |
 
 The 401/403 path is short-circuited before `decideRetry` so the
 existing `forceRefresh` cycle still runs. The token file is
@@ -725,13 +749,28 @@ The write path is `writeLoginDataAtomic()` in
    over the destination. `rename` is atomic on POSIX; the
    destination either holds the previous tokens or the new ones,
    never partial.
-3. Refuses to write through a symlink. A symlinked
-   `logindata.json` is a security risk; the rename would follow
-   the symlink to wherever it points.
+3. **Cannot write *through* a symlink, by construction rather than by
+   refusal.** The temp file is created with `O_EXCL` (so a planted
+   `logindata.json.tmp` symlink fails the open instead of being written
+   through), and the final `fs.renameSync()` **replaces the destination
+   directory entry** — it does not follow it. A symlinked
+   `logindata.json` is therefore swapped for a fresh regular `0o600`
+   file, and whatever the link pointed at is left untouched. The write
+   does not error out and does not log; the protection is the rename
+   semantics. (Verified by replicating the exact syscall sequence:
+   after the rename the victim file still holds its original bytes and
+   the destination is no longer a symlink.)
+
+   `state.json` is the one path that *does* refuse outright:
+   `savePersistentState()` in `src/persistent-state.ts` `lstat`s the
+   destination and throws on a symlink. The token path relies on
+   `rename` instead, so do not describe the two as the same mechanism.
 
 The read path (`loadLoginData`) calls
 `tightenLoginDataIfLoose()` to bring pre-existing loose files
-(mode `0o644` written by an older version) up to `0o600`. This is
+(mode `0o644` written by an older version) up to `0o600`. It
+`lstat`s first and **returns without chmod-ing** if the path is a
+symlink, so it never tightens (or touches) a link target. This is
 idempotent and runs every load, so an upgrade from a pre-fix
 version is closed without a one-shot migration step.
 
@@ -773,40 +812,59 @@ Two non-obvious loaders in `src/config.ts`:
 
 ## Test architecture
 
-Tests live in `test/`, one file per source module — plus the
-cross-module files (`client-circuit.test.ts`,
-`stale-data.test.ts`) that pin behaviour which only exists in the
-wiring. The test runner is `vitest run` (CI runs on Node 20 and 22).
+The suite is 40 files in `test/`, one per source module plus the
+cross-module files (`client-circuit.test.ts`, `stale-data.test.ts`,
+`integration.test.ts`) that pin behaviour which only exists in the
+wiring. The test runner is `vitest run` (CI's `ci` job runs the matrix on
+Node 20 and 22).
 
 | Test file | What it covers |
 |-----------|----------------|
-| `atomic-write.test.ts` | Token file open flags, mode, symlink refusal, crash safety, read-path tightening |
+| `alarm-vendor-table.test.ts` | Every one of the vendor's 73 alarm codes is tiered, read live from `test/fixtures/alarm-code-map.json`; no invented codes; a hand-edit to either side fails |
+| `atomic-write.test.ts` | Token file open flags, mode, symlink handling, crash safety, read-path tightening |
+| `auto-mode-diagnostics.test.ts` | `CARELINK_DATA_PATH=auto` surfaces the *new* route's failure while re-throwing the legacy error with `response.status` intact |
 | `ble-detection.test.ts` | PR #2 family fallback; case-insensitive + normalised family match; `deviceModel`/`sensorModel` prefix table; `NO_SENSOR` sentinel |
+| `ble-payload-shape.test.ts` | A BLE payload with `medicalDeviceFamily` absent (#111) does not throw and names the device from `deviceFamily` |
 | `circuit-breaker.test.ts` | `CircuitBreaker`: issue #9 defaults (5 failures / 60s cooldown), opens on the Nth consecutive failure, one open log per trip, success resets, persisted-state restore (garbage ignored), custom threshold/cooldown |
 | `client-circuit.test.ts` | `CareLinkClient` circuit wiring: opens after 5 consecutive failures and short-circuits the 6th, success resets the counter, restores circuit state from persistent storage |
+| `clock-drift-annotation.test.ts` | `clock_drift_minutes`: present and non-zero only off the quarter-hour grid, absent (not zero) when there is no device clock or no drift |
+| `config.test.ts` | `loadConfig()` env→behaviour mapping (zero direct coverage before #89), incl. the `CARELINK_QUIET` coercion table and safety defaults |
+| `cumulus.test.ts` | Cumulus data-plane helpers: base-URL derivation from discovery, `unwrapDisplayMessage`, `CumulusHttpError` |
 | `data-host-fallback.test.ts` | Dual data-host candidate order, empty-body handling, error precedence per host (#73/#74) |
+| `device-family-vocabulary.test.ts` | The published 16-family vocabulary audited family by family; every entry has a stated reason, including the ones `isBleDevice()` deliberately rejects |
 | `discovery.test.ts` | Discovery URL builder + app-version pin; `certificates[]` tripwire |
 | `doctor.test.ts` | `npm run doctor` pre-flight self-check |
+| `dst-drift.test.ts` | DST behaviour of the pump-clock offset: a ±60 min shift rounds exactly, never to :30 |
 | `endpoint-candidates.test.ts` | Carepartner data endpoint version list |
 | `filter.test.ts` | Recency filter (only-newest-kept) |
 | `force-refresh.test.ts` | `authenticate()` return value + successive-401 regression |
 | `integration.test.ts` | 429 + `Retry-After`, 404 fail-fast wiring |
-| `last-alarm.test.ts` | Priority-1 codes, severity mapping, "never silent drop" |
+| `last-alarm.test.ts` | Severity mapping, "never silent drop", and the scoped absence guard on alarms reaching treatments |
+| `logger.test.ts` | Redaction contract in both `pretty` and `json` formats (zero direct coverage before #88) |
 | `login-errors.test.ts` | Named error, `selectAuth0ConfigUrl` helper, and the cumulus-track gate (#75) |
+| `metrics-upload-labels.test.ts` | Per-endpoint metric labels for all three upload targets — the two-way `includes('entries')` test silently counted treatments as devicestatus |
 | `observe-server.test.ts` | Opt-in loopback observability server: `/healthz` JSON, `/metrics` exposition with the `carelink_circuit_open` gauge, both endpoints reflect an open circuit, 404 on unknown paths |
+| `offset-sanity.test.ts` | The 26 h pump-offset bound: a plausible shift is applied, a clock fault beyond it is not |
+| `payload-census.test.ts` | `payloadCensus()` against a predicted 780G payload, plus the shipped shield/PLGM/alarm vocabulary constants |
 | `persistent-state.test.ts` | `state.json` persistence: fresh default when the file is missing, tracked fields round-trip, mode 0600 write + read-path tightening, default on corrupt / wrong-shape input, no `.tmp` sidecar left behind, symlink refusal |
 | `pump-offset.test.ts` | Quarter-hour offset rounding (regression for whole-hour skew) |
 | `refresh-failure.test.ts` | Permanent vs recoverable refresh failure classification |
 | `retry-policy.test.ts` | Status-aware retry: fail-fast, `Retry-After`, jittered backoff |
+| `sensor-duration-units.test.ts` | Both wire spellings for sensor age (`*Hours` legacy vs `*Minutes` v13) converted to Nightscout's hours — a 60× error would be a lie in a medical field |
 | `stale-data.test.ts` | Stale-data webhook: fires past the threshold, silent within it, once per stale period, recovers on the next successful fetch; graceful-shutdown SIGTERM flag + second-signal force-exit |
 | `transform.test.ts` | SGV + devicestatus transform, mmol/L conversion, trend mapping |
+| `treatments.test.ts` | `markers[]` → treatments: deterministic anchor/`_id`, slot arithmetic, marker→event type mapping, dedupe-stable re-send |
+| `trend-map.test.ts` | CareLink trend string → Nightscout trend number, transcribed from `cgm-remote-monitor`'s `DIRECTIONS` and cross-checked against xDrip |
+| `upload-response.test.ts` | Nightscout answers 200 while discarding a payload; the response count, not the status, is the success signal |
 | `urls.test.ts` | `buildUrls` shape, data-host candidates, unknown-server single-host behaviour |
+| `user-info-shape.test.ts` | A 200 from `/patient/users/me` carrying HTML / `[]` / `null` / an error body fails **legibly** instead of returning `{}` as success |
 | `username-source.test.ts` | `accountUsername()` prefers server-reported username over `.env` |
+| `zoned-reading-time.test.ts` | CareLink wall-clock strings are bound to the payload's `clientTimeZoneName`, not the host zone (identical instants under any `TZ`) |
 
 ### Fixture strategy
 
-`test/fixtures.ts` and `test/samples.ts` are the only test
-fixtures. The convention:
+`test/fixtures.ts`, `test/samples.ts` and the JSON in
+`test/fixtures/` are the only test fixtures. The convention:
 
 - `fixtures.ts` exports `data(overrides?)` — a function that
   returns a fully-populated `CareLinkData` object. Tests that
@@ -819,6 +877,10 @@ fixtures. The convention:
   trailing `sg: 0` entry that the production code must drop
   (real CGM sensors occasionally emit a zeroed reading on
   disconnect); the test pins the drop.
+- `fixtures/alarm-code-map.json` is the vendor's own 73-code alarm table,
+  vendored from the research repo (area DP, 2026-11-11) so the alarm suite
+  is self-contained. It is imported by `alarm-vendor-table.test.ts` — the
+  one fixture that is *data to be held to*, not a payload to shape.
 
 ### What is NOT unit-tested
 
@@ -833,10 +895,15 @@ does not have continuous access to a real pump to build one.
 This means **a regression in the CareLink API shape is not
 caught by the test suite**. The bridge's response is to add a
 new `test/samples.ts` entry when a regression is reported, with
-a sanitised real-payload fixture. The 780G payload items still
-uncovered (markers for treatments, therapy algorithm state,
-limits schedule, NGP-tier alarm codes) are tracked in
-[ROADMAP.md](../ROADMAP.md).
+a sanitised real-payload fixture. Of the 780G payload items that were
+once listed as uncovered, **`markers[]` → treatments and
+`therapyAlgorithmState` → `pump.autoMode` shipped in v0.3.0** — recovered
+from the vendor's own client parser, so they are covered by
+`treatments.test.ts`, `auto-mode-diagnostics.test.ts` and
+`payload-census.test.ts` against *modelled* payloads, not captured ones.
+Still genuinely uncovered and tracked in [ROADMAP.md](../ROADMAP.md):
+the `limits[]` BG-target schedule, the NGP-tier alarm **display strings**
+(blocked on a token, not a pump), and multi-patient fan-out.
 
 ## How to add a regression test
 

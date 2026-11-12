@@ -87,7 +87,10 @@ These are not negotiable:
 ## Branch protection
 
 `main` is protected. Every change goes through a PR with
-required CI checks (`test (20)`, `test (22)`). The
+required CI checks (`ci (20)`, `ci (22)` — the job was renamed
+from `test` to `ci` in
+[#45](https://github.com/NovaLux12/carelink-bridge/pull/45), and
+the required contexts follow the job name). The
 `enforce_admins` flag is on, so even the maintainer can't
 push directly. See [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md)
 for the rationale.
@@ -131,10 +134,15 @@ which finding each source comment rests on.
 
 ## Releasing (maintainers)
 
-Version metadata must stay in sync — v0.1.1 through v0.1.3
-shipped without bumping `package.json`, which is how
+Version metadata must stay in sync — v0.1.1 and v0.1.2
+shipped with `package.json` still at `0.1.0`
+(`git show v0.1.1:package.json` and `v0.1.2` both read
+`"version": "0.1.0"`, while the tags were `v0.1.1` and
+`v0.1.2`). v0.1.3 was the fix: it reads `0.1.3` and matches its
+tag. So the drift was **v0.1.1–v0.1.2**, and v0.1.3 closed it —
+which is why
 [#17](https://github.com/NovaLux12/carelink-bridge/issues/17)
-happened.
+was filed against the gap and this checklist exists.
 
 **The same drift happened again, in a worse form, and was closed on 2026-11-12.**
 The v0.3.0 and v0.4.0 *code* merged over months while `package.json` stayed at
