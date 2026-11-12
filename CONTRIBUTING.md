@@ -136,13 +136,16 @@ shipped without bumping `package.json`, which is how
 [#17](https://github.com/NovaLux12/carelink-bridge/issues/17)
 happened.
 
-**The same drift happened again, in a worse form.** The v0.3.0 and v0.4.0 *code*
-merged over months while `package.json` stayed at `0.2.0` and no tag was cut, so
-`ROADMAP.md` said "Shipped 2026-09-09" for a version that did not exist anywhere
-in git or on the releases page. Anyone reading the roadmap to decide what they
-were running was misled. The rule that follows from it: **"shipped" means a tag
-exists.** If the code is on `main` but untagged, the roadmap must say so in those
-words, and cutting that tag is the next release's job.
+**The same drift happened again, in a worse form, and was closed on 2026-11-12.**
+The v0.3.0 and v0.4.0 *code* merged over months while `package.json` stayed at
+`0.2.0` and no tag was cut, so `ROADMAP.md` said "Shipped 2026-09-09" for a
+version that did not exist anywhere in git or on the releases page. Anyone
+reading the roadmap to decide what they were running was misled.
+
+The rule that came out of it, and which the v0.3.0 release was cut to satisfy:
+**"shipped" means a tag exists.** If the code is on `main` but untagged, the
+roadmap must say so in those words, and cutting that tag is the next release's
+job — not a later phase's.
 
 For every release:
 
