@@ -14,6 +14,51 @@ record, not reconstructed.
 
 _Nothing yet._
 
+## [0.3.1] — 2026-11-12
+
+### Fix
+
+**`docs/validation-day-instinct.md` told readers to publish their pump serial
+number.** The guide described the device-identity log line as *"redacted"* and
+then instructed *"Copy it verbatim into the issue."* It is not redacted:
+`DEVICE_IDENTITY_KEYS` in `src/carelink/client.ts` includes
+`deviceSerialNumber`, and the snapshot prints raw values. Anyone following that
+page during validation day would have pasted a persistent hardware identifier
+into a public GitHub issue.
+
+The page now states plainly that the line is NOT redacted, names the key to
+remove, and the source comment no longer justifies the behaviour with *"a device
+family name is not a secret"* — true of the family names, false of the serial in
+the same array. The code change is comment-only; no behaviour changed.
+
+This is a **patch release rather than an edit to v0.3.0** on purpose: the
+defective instruction is inside the v0.3.0 tag, and moving a published tag would
+rewrite what an existing release points at. The correction ships forward.
+
+### Everything else in this release is documentation
+
+Sixteen prose files were audited against the running code and corrected. Notable
+among them: every "what it uploads" description that predated treatments and
+auto-mode; `npm run doctor`'s output symbols and closing line; two error messages
+that were never emitted; "both version numbers should be 20 or higher" (only
+Node's is — npm is 11.x on Node 24); the access-token lifetime, which is
+refreshed inline rather than ~30 days in the background; `BLE_API_VERSIONS`
+listed as `[13, 11, 6, 5]` when it is `[13, 12, 11, 6]`; SECURITY.md's "no
+inbound network listeners", false since the loopback metrics server landed; the
+module map, which omitted six modules; the test table, which omitted 17 of 40
+files; and ROADMAP's v0.2.0 row, which credited that tag with work that landed
+five days after it.
+
+One correction went the other way. A draft audit claimed the write path's
+symlink protection was unimplemented. It is implemented — `fs.renameSync` replaces
+the directory entry rather than following the link, verified by replicating the
+syscall sequence against a symlinked file. ADR 0003 now explains the mechanism
+accurately instead of saying the write "refuses", which it does not: it silently
+replaces, and an operator who symlinked the file into a backup directory should
+know that.
+
+594 tests / 40 files. `drift:check` 85 passed, 0 failed.
+
 ## [0.3.0] — 2026-11-12
 
 **This release is the one that carries the pump data.** Before it, the bridge
@@ -730,7 +775,8 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.5...v0.1.6
