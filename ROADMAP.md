@@ -22,12 +22,12 @@ Each phase below has the same shape:
 
 ## Phase status (2026-11-12)
 
-**Read this carefully: "shipped" in this table means the *code* is on `main`,
-not that a tag exists.** Only `v0.1.0`–`v0.2.0` have been tagged and released
-(8 tags, 8 releases). The v0.3.0 and v0.4.0 *work* merged long ago but the
-version was never cut, so `package.json` still reads `0.2.0` and
-`git tag` stops at `v0.2.0`. That is the same version-metadata drift
-CONTRIBUTING.md warns about, and v0.3.0 is the release that closes it.
+**"Shipped" in this table means a tag and a release exist.** That distinction
+had to be drawn on 2026-11-12 because it had stopped being true: v0.3.0 was
+marked shipped with a date while no such tag existed anywhere, so
+`package.json` read `0.2.0` and `git tag` stopped at `v0.2.0`. **That drift is
+now closed** — `v0.3.0` was tagged and released on 2026-11-12 and
+`package.json` reads `0.3.0`.
 
 | Phase | Code on `main` | Tag / release | Notes |
 |-------|---------------|---------------|-------|
@@ -39,8 +39,8 @@ CONTRIBUTING.md warns about, and v0.3.0 is the release that closes it.
 | v0.1.5 | ✅ | **v0.1.5** (2026-07-19) | Username source fix |
 | v0.1.6 | ✅ | **v0.1.6** (2026-07-19) | `npm run doctor` |
 | v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening + operability |
-| v0.3.0 | ✅ | ⬜ **untagged** | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 590-test suite |
-| v0.4.0 | ✅ | ⬜ untagged | Folded into v0.3.0 — the observability work (#51, #59) merged before this release and ships with it |
+| v0.3.0 | ✅ | **v0.3.0** (2026-11-12) | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 594-test suite |
+| v0.4.0 | ✅ | folded into **v0.3.0** | The observability work (#51, #59) merged before that release and shipped inside it; no separate tag was cut |
 | v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
 | v0.6.0+ | ❌ | — | Proposed, low priority |
 
@@ -230,12 +230,12 @@ than the fetch loop. Details in
 ("Reports API"); the vendor-side host and gateway evidence is in
 [NovaLux12/carelink-api-research](https://github.com/NovaLux12/carelink-api-research/blob/main/docs/07-admin-portal-and-reporting.md).
 
-## v0.3.0 — reliability + pump data (code shipped, release pending)
+## v0.3.0 — reliability + pump data (shipped 2026-11-12)
 
-**Status:** the code below is on `main`; **no `v0.3.0` tag exists yet.** This is
-the release that carries it. The observability work originally planned as
-v0.4.0 (#51, #59) merged before this tag and ships in the same release rather
-than waiting for its own.
+**Status:** released as `v0.3.0` on 2026-11-12 — tag, release object and
+`package.json` all agree. The observability work originally planned as v0.4.0
+(#51, #59) merged before this tag and shipped inside it rather than waiting for
+its own release.
 
 **Goal:** make the bridge more resilient to CareLink's
 uptime and rate-limiting without operator intervention, and
@@ -258,11 +258,11 @@ wrong, not merely inconvenient.
 
 **Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9)
 
-## v0.4.0 — observability (code shipped, release folded into v0.3.0)
+## v0.4.0 — observability (shipped inside v0.3.0, no separate tag)
 
-**Status:** everything below is on `main`, but **no `v0.4.0` tag exists** and
-none will be cut — the work shipped inside the v0.3.0 release. This heading is
-kept so the original plan stays readable rather than being deleted.
+**Status:** everything below shipped in the **v0.3.0** release on 2026-11-12.
+No `v0.4.0` tag exists and none will be cut — the heading is kept so the
+original plan stays readable rather than being deleted.
 
 **Goal:** make the bridge debuggable from logs and metrics,
 not just from `console.log` scraping.
