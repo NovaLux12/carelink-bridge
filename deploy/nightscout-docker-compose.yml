@@ -98,9 +98,22 @@ services:
     env_file:
       - ../.env
     volumes:
-      # Created externally via `npm run login`; read-only in the container.
-      # state.json is written to /app (image runs as USER node, /app chowned).
-      - ../logindata.json:/app/logindata.json:ro
+      # ⚠ DO NOT bind-mount logindata.json — not :ro and not :rw.
+      #
+      # writeLoginDataAtomic() writes logindata.json.tmp and rename()s it over
+      # the destination. A rename onto a bind-mounted FILE fails with EBUSY
+      # regardless of the :ro/:rw flag (measured: EBUSY on both, and unlinkSync
+      # on the :ro mount is EBUSY too). So once the access token expires the
+      # refresh cannot be written, every fetch fails with a bare errno, and the
+      # bridge never re-logins because the file is still sitting there.
+      #
+      # Instead: leave the token out of the image entirely and copy it in with
+      # `docker cp`, or mount a DIRECTORY and point CARELINK_STATE_FILE at a
+      # volume. See deploy/README.md § "Docker: the token file".
+      #
+      # Kept as a commented example of what not to do, because this line shipped
+      # that way and looked harmless.
+      # - ../logindata.json:/app/logindata.json:ro
 
 volumes:
   mongo-data:
