@@ -134,6 +134,10 @@ if (config.metricsPort > 0) {
         lastSuccessTimestamp,
         consecutiveFailures: client.getConsecutiveFailures(),
         circuitOpen,
+        // The caller's real threshold, so a CARELINK_STALE_THRESHOLD_MINUTES
+        // override is honoured here too. Omitting it would silently restore the
+        // pre-#134 behaviour where stale data read as healthy.
+        staleThresholdMs: config.staleThresholdMs,
       };
     },
   });
@@ -228,8 +232,20 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
       logger.info('Upload accepted', { endpoint, count: stored });
     }
   } catch (err) {
-    // Continue even if Nightscout can't be reached
-    logger.error('Upload failed', { endpoint, error: (err as Error).message });
+    // Continue even if Nightscout can't be reached, but COUNT it. Before this
+    // the failure existed only as a log line, so a Nightscout that had started
+    // rejecting every write was invisible on any dashboard — the upload counter
+    // only ever incremented on success.
+    const reason = metrics.classifyUploadFailure(err);
+    metrics.incUploadFailure(
+      endpoint.includes('entries')
+        ? 'entries'
+        : endpoint.includes('treatments')
+          ? 'treatments'
+          : 'devicestatus',
+      reason,
+    );
+    logger.error('Upload failed', { endpoint, reason, error: (err as Error).message });
   }
 }
 
@@ -255,6 +271,7 @@ async function requestLoop(): Promise<void> {
           metrics.incFetch('failure');
           metrics.observeFetchDuration(Date.now() - t0);
           metrics.setCircuitOpen(client.isCircuitOpen());
+          metrics.setStale(true);
           checkStale();
           if (shuttingDown) break;
           await sleep(config.interval, abortSignal);
@@ -276,6 +293,16 @@ async function requestLoop(): Promise<void> {
 
         lastSuccessTimestamp = Date.now();
         staleNotified = false;
+        metrics.setStale(false);
+        // Age of the DATA, not of the fetch. A successful fetch of an hour-old
+        // payload looks identical to a fresh one in every other counter, which
+        // is exactly the "stale but 200" case the legacy backend produces.
+        // transform() already refused the stale case above, so any reading here
+        // is one the bridge considers fresh — this exposes how fresh.
+        const newest = transformed.entries[transformed.entries.length - 1];
+        if (newest && Number.isFinite(newest.date)) {
+          metrics.setNewestReading(newest.date);
+        }
         persistState();
 
         logger.info('Fetch succeeded', {

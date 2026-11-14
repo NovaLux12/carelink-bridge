@@ -10,6 +10,7 @@ import { decideRetry } from '../retry-policy.js';
 import { resolveServerName, buildUrls, type CareLinkUrls } from './urls.js';
 import { cumulusBaseUrlFrom, fetchDisplayMessage } from './cumulus.js';
 import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
+import { incTokenRefresh } from '../metrics.js';
 import { logPayloadCensus } from '../payload-census.js';
 import { assertUserInfoShape } from '../login-errors.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
@@ -160,6 +161,12 @@ export class CareLinkClient {
         loginData = await refreshToken(loginData);
         this.lastRefreshAt = Date.now();
         this.updateNextScheduledRefresh(loginData.access_token);
+        // Wired here because this was the one counter with no call site in the
+        // whole of src/ while still being documented in USER-GUIDE.md and
+        // rendered in the exposition — a dashboard panel that could never move
+        // (issue #134). Counted on the refresh itself, not on the write below:
+        // a succeeded refresh that fails to persist is still a refresh.
+        incTokenRefresh('success');
       } catch (e) {
         // Permanent auth failure (any 4xx from the refresh endpoint
         // without Retry-After — see src/refresh-failure.ts) means the
@@ -178,6 +185,7 @@ export class CareLinkClient {
         }
         // Recoverable — rethrow the original error verbatim so the retry
         // loop in fetch() can apply its own backoff policy.
+        incTokenRefresh('failure');
         throw e;
       }
       try {
