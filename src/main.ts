@@ -13,6 +13,7 @@ import { transform } from './transform/index.js';
 import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
 import { isUsablePayload } from './payload-shape.js';
+import { decideStale } from './stale-watchdog.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
 import type { UploadEndpoint } from './metrics.js';
@@ -103,15 +104,22 @@ async function fireStaleWebhook(since: number): Promise<void> {
 }
 
 function checkStale(): void {
-  if (lastSuccessTimestamp === null) return;
+  const decision = decideStale(lastSuccessTimestamp, Date.now(), config.staleThresholdMs);
+  if (decision.stale === null) return;
 
-  const elapsed = Date.now() - lastSuccessTimestamp;
-  if (elapsed > config.staleThresholdMs) {
+  // Track the gauge off the same decision the watchdog uses, not just off the
+  // stale-payload branch. Without this, a bridge whose every fetch is failing
+  // (circuit open, network dead, auth broken) fires the STALE warning while
+  // carelink_stale still reads 0 — the gauge would report "fine" in exactly the
+  // situation it exists to flag.
+  metrics.setStale(decision.stale);
+
+  if (decision.stale) {
     if (!staleNotified) {
-      const mins = Math.round(elapsed / 60000);
+      const mins = Math.round((decision.elapsedMs ?? 0) / 60000);
       logger.warn(`STALE — no successful fetch for ${mins} min (threshold ${config.staleThresholdMs / 60000} min)`, { component: 'bridge' });
       staleNotified = true;
-      void fireStaleWebhook(lastSuccessTimestamp);
+      void fireStaleWebhook(lastSuccessTimestamp as number);
     }
   } else if (staleNotified) {
     // Recovered

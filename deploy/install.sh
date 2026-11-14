@@ -5,7 +5,8 @@
 # npm run build + restart the service).
 #
 # Prerequisites:
-#   - Node.js >= 20 (the bridge's engines.node requirement)
+#   - Node.js >= 22.12 (the bridge's engines.node requirement: puppeteer-core@25
+#     is a runtime dependency and requires it; Node 20 is EOL)
 #   - git
 #   - systemd (this script sets up a user service)
 #   - loginctl enable-linger $USER (so the service survives logout)
