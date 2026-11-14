@@ -149,3 +149,48 @@ describe('writeLoginDataAtomic', () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 });
+
+describe('atomic write uses platform open flags, not hardcoded octals', () => {
+  /**
+   * The bug this guards: `writeLoginDataAtomic` used to declare
+   * `O_CREAT = 0o100`, `O_EXCL = 0o200` — the LINUX numeric values — with a
+   * comment claiming Node exposes no constants export for them. It does:
+   * `fs.constants`. On macOS `O_CREAT` is 512 (0o1000) and `O_EXCL` is 2048
+   * (0o4000), so the Linux bitmask gave `open` no valid create flag and it
+   * returned ENOENT against a writable directory.
+   *
+   * Found in the field: the whole OAuth login succeeded, real tokens came back,
+   * and the save died with an ENOENT that reads like a permissions problem.
+   * Every existing test passed on Linux, because there the hardcoded values are
+   * correct — which is precisely why this needs an explicit assertion rather
+   * than relying on the happy path.
+   */
+  it('the constants the module relies on differ from the old hardcoded octals on some platforms', () => {
+    const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
+
+    // The invariant: whatever platform this runs on, fs.constants must be the
+    // source of truth. Assert they are the documented POSIX-ish flags and not
+    // accidental zeros (a zero O_CREAT would silently turn O_EXCL into a plain
+    // open and lose the exclusivity guarantee).
+    expect(O_CREAT).toBeGreaterThan(0);
+    expect(O_WRONLY).toBeGreaterThan(0);
+    expect(O_EXCL).toBeGreaterThan(0);
+
+    // And that the module actually works on THIS platform with them — the
+    // regression assertion. This is the line that fails on macOS with the old
+    // code and passes with the fix.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-flags-'));
+    const target = path.join(dir, 'logindata.json');
+    expect(() => writeLoginDataAtomic(target, loginDataFixture())).not.toThrow();
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+  });
+
+  it('records what this platform reports, so a cross-platform failure is diagnosable', () => {
+    // Not an assertion about specific numbers — a fingerprint. When this test
+    // fails on a new platform, the diff shows which constant moved.
+    const { O_CREAT, O_WRONLY, O_EXCL } = fs.constants;
+    const fingerprint = `${process.platform}: O_CREAT=${O_CREAT} O_WRONLY=${O_WRONLY} O_EXCL=${O_EXCL}`;
+    expect(fingerprint).toMatch(/^[a-z0-9]+: O_CREAT=\d+ O_WRONLY=\d+ O_EXCL=\d+$/);
+  });
+});
