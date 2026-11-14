@@ -57,7 +57,7 @@ security-sensitive.
   migration step.
 - TypeScript strict mode catches type errors at build
   time.
-- CI runs `tsc --noEmit` and `vitest` on Node 20 and 22
+- CI runs `tsc --noEmit` and `vitest` on Node 22 and 24
   on every PR. Direct pushes to `main` are blocked.
   See [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md).
 - The runtime dependency count is explicitly tracked and
@@ -129,7 +129,8 @@ travels with the codebase, not this file):
 - [ADR 0006](./docs/adr/0006-no-npm-audit-in-ci.md) — no
   `npm audit` in CI (Dependabot is the source of truth).
 - [ADR 0007](./docs/adr/0007-node-20-plus-only.md) —
-  Node 20+ only.
+  Node 22.12+ only (Node 18 and Node 20 dropped; the
+  filename predates the amendment).
 - [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md)
   — branch protection with `enforce_admins`.
 

@@ -812,14 +812,16 @@ Two non-obvious loaders in `src/config.ts`:
 
 ## Test architecture
 
-The suite is 40 files in `test/`, one per source module plus the
+The suite is **45 files** in `test/`, one per source module plus the
 cross-module files (`client-circuit.test.ts`, `stale-data.test.ts`,
 `integration.test.ts`) that pin behaviour which only exists in the
 wiring. The test runner is `vitest run` (CI's `ci` job runs the matrix on
-Node 20 and 22).
+Node 22 and 24 — Node 20 was dropped on 2026-11-13; see
+[ADR 0007](./adr/0007-node-20-plus-only.md)).
 
 | Test file | What it covers |
 |-----------|----------------|
+| `alarm-severity-vs-vendor-text.test.ts` | Every alarm code's text and severity checked against the vendor's own i18n bundle; the 10 codes whose string says "Delivery Stopped" must be `delivery_stopped`, and a battery reminder must not be |
 | `alarm-vendor-table.test.ts` | Every one of the vendor's 73 alarm codes is tiered, read live from `test/fixtures/alarm-code-map.json`; no invented codes; a hand-edit to either side fails |
 | `atomic-write.test.ts` | Token file open flags, mode, symlink handling, crash safety, read-path tightening |
 | `auto-mode-diagnostics.test.ts` | `CARELINK_DATA_PATH=auto` surfaces the *new* route's failure while re-throwing the legacy error with `response.status` intact |
@@ -842,10 +844,13 @@ Node 20 and 22).
 | `last-alarm.test.ts` | Severity mapping, "never silent drop", and the scoped absence guard on alarms reaching treatments |
 | `logger.test.ts` | Redaction contract in both `pretty` and `json` formats (zero direct coverage before #88) |
 | `login-errors.test.ts` | Named error, `selectAuth0ConfigUrl` helper, and the cumulus-track gate (#75) |
+| `metrics-observability.test.ts` | The counters that could not move before #134: `carelink_data_age_seconds`, `carelink_upload_failures_total{endpoint,reason}` with its closed label sets, the `carelink_stale` gauge, and `classifyUploadFailure` mapping a 0-stored error to `discarded` |
 | `metrics-upload-labels.test.ts` | Per-endpoint metric labels for all three upload targets — the two-way `includes('entries')` test silently counted treatments as devicestatus |
+| `nightscout-conformance.test.ts` | What Loop and Nightscout actually read: `timestamp` on every treatment (Loop discards the treatment without it), `units` on BG Check, `pump.status.suspended` as a boolean (the one suspend field `pump.js` renders), and a 24-hex devicestatus `_id` |
 | `observe-server.test.ts` | Opt-in loopback observability server: `/healthz` JSON, `/metrics` exposition with the `carelink_circuit_open` gauge, both endpoints reflect an open circuit, 404 on unknown paths |
 | `offset-sanity.test.ts` | The 26 h pump-offset bound: a plausible shift is applied, a clock fault beyond it is not |
 | `payload-census.test.ts` | `payloadCensus()` against a predicted 780G payload, plus the shipped shield/PLGM/alarm vocabulary constants |
+| `payload-gate.test.ts` | The fetch-loop gate accepts v13 `display/message` (no `lastMedicalDeviceDataUpdateServerTime`) — it previously rejected the payload `transform()` turned into 2 entries + 1 devicestatus + 1 treatment |
 | `persistent-state.test.ts` | `state.json` persistence: fresh default when the file is missing, tracked fields round-trip, mode 0600 write + read-path tightening, default on corrupt / wrong-shape input, no `.tmp` sidecar left behind, symlink refusal |
 | `pump-offset.test.ts` | Quarter-hour offset rounding (regression for whole-hour skew) |
 | `refresh-failure.test.ts` | Permanent vs recoverable refresh failure classification |
@@ -853,6 +858,7 @@ Node 20 and 22).
 | `sensor-duration-units.test.ts` | Both wire spellings for sensor age (`*Hours` legacy vs `*Minutes` v13) converted to Nightscout's hours — a 60× error would be a lie in a medical field |
 | `stale-data.test.ts` | Stale-data webhook: fires past the threshold, silent within it, once per stale period, recovers on the next successful fetch; graceful-shutdown SIGTERM flag + second-signal force-exit |
 | `transform.test.ts` | SGV + devicestatus transform, mmol/L conversion, trend mapping |
+| `treatment-idempotence.test.ts` | One physical meal produces one row across polls with a drifting, non-slot-aligned anchor; the `_id` and `created_at` are stable, while genuinely distinct boluses at one slot stay separate |
 | `treatments.test.ts` | `markers[]` → treatments: deterministic anchor/`_id`, slot arithmetic, marker→event type mapping, dedupe-stable re-send |
 | `trend-map.test.ts` | CareLink trend string → Nightscout trend number, transcribed from `cgm-remote-monitor`'s `DIRECTIONS` and cross-checked against xDrip |
 | `upload-response.test.ts` | Nightscout answers 200 while discarding a payload; the response count, not the status, is the success signal |

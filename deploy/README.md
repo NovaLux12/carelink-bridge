@@ -7,7 +7,7 @@ This directory contains everything needed to run `carelink-bridge` as a long-liv
 | Requirement | Why |
 |---|---|
 | Linux with systemd | We install a user-level systemd service |
-| Node.js 20 or newer | The bridge's `engines.node` requirement |
+| Node.js **22.12** or newer, at **`/usr/bin/node`** | `package.json` declares `engines.node: ">=22.12.0"` (puppeteer-core@25 is a runtime dependency). The shipped unit hardcodes `ExecStart=/usr/bin/node`, so an nvm install at `~/.nvm/…` fails with `status=203/EXEC` — see [Login](#login-npm-run-login) |
 | git | To clone the repo |
 | `loginctl enable-linger $USER` | So the service survives your logout |
 | Outbound HTTPS to `carelink.minimed.{eu,com}` | CareLink OAuth, discovery and the `/patient/*` metadata endpoints |
@@ -90,6 +90,16 @@ Values verified against `src/config.ts`, `src/carelink/client.ts`,
 tuning knobs are read with a case-insensitive lookup, so lower-case
 spellings work too — the documented style is upper case.
 
+**That "verified against `carelink-bridge.env.example`" claim was false when it
+was written** (corrected 2026-11-14). The template was missing
+`CARELINK_DATA_PATH`, `CARELINK_APP_VERSION`, `CARELINK_ASSUME_TIMEZONE`,
+`CARELINK_STALE_THRESHOLD_MINUTES` and `STALE_WEBHOOK_URL`; it has them now, and
+`.env.example` gained the same entries so the two templates no longer disagree.
+The one that mattered is `CARELINK_ASSUME_TIMEZONE`: without it an unzoned
+reading is interpreted as UTC, so a UK user in BST has every value shifted an
+hour — and the warning that says so goes through `logger.log()`, which is
+invisible at the default `CARELINK_QUIET=true`. There is no signal.
+
 `WEBSITE_HOSTNAME` is also read, as a fallback Nightscout host when `NS`
 is unset; that is an Azure App Service convention, not something to set
 on a systemd host.
@@ -102,11 +112,52 @@ CareLink uses OAuth2 with a browser-based flow for the initial login. The bridge
 2. **Browser window** — opens Chrome/Edge/Chromium via Puppeteer, you log in manually, the bridge intercepts the OAuth redirect. Works for CAPTCHA / MFA.
 3. **Terminal paste fallback** — prints the Auth0 authorize URL, you open it in any browser, log in, copy the redirect URL with the `code=...` parameter, paste it back.
 
-Run `npm run login` from the deploy directory. On success, `logindata.json` (gitignored) is written and the service can start. **The bridge refreshes the OAuth tokens automatically using the refresh token; you only need to re-run `npm run login` if the refresh token itself dies (revoked, or a permanent 4xx).** Token lifetime is whatever the JWT `exp` claim says, not a fixed number — and whether a refresh token survives ~30 days of continuous uptime is untested (it is an open question in `docs/validation-day-instinct.md`), so do not plan around a 30-day figure.
+Run `npm run login` from `~/carelink-bridge` — **not** from `deploy/`. There is
+no `package.json` in `deploy/`, so the command does not exist there. (This page
+said "from the deploy directory" until 2026-11-14; `install.sh` and the
+Dockerfile both run it from the repo root, which is where the script lives.)
+
+```bash
+cd ~/carelink-bridge && npm run login
+```
+
+On success, `logindata.json` (gitignored) is written and the service can start. **The bridge refreshes the OAuth tokens automatically using the refresh token; you only need to re-run `npm run login` if the refresh token itself dies (revoked, or a permanent 4xx).** Token lifetime is whatever the JWT `exp` claim says, not a fixed number — and whether a refresh token survives ~30 days of continuous uptime is untested (it is an open question in `docs/validation-day-instinct.md`), so do not plan around a 30-day figure.
+
+**You must log in before you start the service.** With no `logindata.json`,
+`dist/main.js` does not exit with a message — it enters the login flow, and
+strategy 3 blocks on a `readline` prompt. Under systemd stdin is not a TTY, so
+that promise never settles: node prints `Detected unsettled top-level await` and
+**exits 13**, and the unit retries it `StartLimitBurst=5` times before giving
+up. The journal then says nothing about the missing login, only the crash and
+`start request repeated too quickly`. If you hit that, the fix is
+`cd ~/carelink-bridge && npm run login`, then `systemctl --user start`.
 
 ### Pre-flight check (`npm run doctor`)
 
-Before `systemctl --user start`, run `npm run doctor` from the deploy directory. It confirms `.env` is complete, the login token is valid, and both CareLink and Nightscout are reachable with the right API secret — without fetching pump data. Especially worth running the first time a new pump is paired; it turns "why is no data showing up" into a specific, named failure. Exit code is non-zero if any check fails, so it can gate an automated deploy.
+Before `systemctl --user start`, run `npm run doctor` from `~/carelink-bridge`
+(again, no `package.json` in `deploy/`). It confirms `.env` is complete, reports
+the login token's state, and checks that both CareLink and Nightscout are
+reachable with the right API secret — without fetching pump data. Especially
+worth running the first time a new pump is paired; it turns "why is no data
+showing up" into a specific, named failure.
+
+**It is not a deploy gate, and it does not prove the bridge can fetch.** Three
+limits that matter when you read a green result:
+
+- **Exit code.** Non-zero only for `✗` rows. A missing `logindata.json` is a `!`
+  warning and exits **0** — so the check most likely to be wrong before a first
+  start does not fail the command. Do not wire it into a gate that assumes a
+  zero exit means "logged in".
+- **No login attempt.** It reads and decodes the stored token; it never posts
+  credentials, so an MFA/CAPTCHA wall is invisible to it.
+- **No data call.** It probes the discovery document only. It cannot
+  distinguish `204`, `206 Upgrade application`, or a legacy backend answering
+  `200` with stale records, and it does not touch the cumulus data track that
+  the fetch actually uses.
+
+It also hardcodes the discovery pin (`android/3.6`) instead of importing
+`DISCOVERY_APP_VERSION`, so a moved pin changes what login probes but not what
+doctor probes.
 
 ### Start the service
 
@@ -153,19 +204,70 @@ The repo root ships a multi-stage `Dockerfile` (`node:22-bookworm-slim`,
 small runtime image, runs as `USER node`). The bridge is also wired in as
 a sibling service in `deploy/nightscout-docker-compose.yml`.
 
-```bash
-# 1. Same prerequisites as systemd: .env configured, then one-time login
-#    (logindata.json is created on the host, mounted read-only below).
-cd ~/carelink-bridge && npm run login
+**`npm run doctor` and `npm run login` do not exist inside the image.** The
+runtime stage runs `npm ci --omit=dev` and those two scripts are `tsx …`, with
+`tsx` a devDependency — so inside the container they fail with
+`sh: 1: tsx: not found`. Run both **on the host**, before building or starting
+the container. (Verified against a built image, 2026-11-14.)
 
-# 2a. Standalone container.
+**Do not bind-mount `logindata.json` at all — not `:ro`, not `:rw`.** Token
+refresh rewrites the file atomically: `writeLoginDataAtomic` writes
+`logindata.json.tmp` and `rename`s it over the destination. A `rename` onto a
+bind-mounted *file* fails with **`EBUSY`** either way, and the bridge
+deliberately rethrows that errno rather than deleting the file — so once the
+access token expires, every fetch fails with a bare `EBUSY` and the container
+never re-logins. Both this page and `deploy/nightscout-docker-compose.yml`
+mounted it `:ro`; this page is corrected and **the compose file still has the
+`:ro` mount — it needs the same fix** (remove the volume and use the
+`docker cp` step below). Verified against a built image (2026-11-14):
+`writeLoginDataAtomic('/app/logindata.json')` → `EBUSY` on both a `:ro` and an
+`:rw` file mount; `unlinkSync` on the `:ro` mount → `EBUSY` too, so even the
+delete-then-re-login path fails.
+
+The token path is fixed at `/app/logindata.json` (it is not configurable), so
+the arrangement that works is to put the file in the container's own writable
+filesystem and re-place it after each host-side login:
+
+```bash
+# 1. Log in ON THE HOST — the image cannot do this (no tsx).
+cd ~/carelink-bridge
+npm run doctor          # host only
+npm run login           # host only; writes ~/carelink-bridge/logindata.json
+
+# 2a. Standalone container. Persist state in a volume (see below).
 docker build -t carelink-bridge .
 docker run -d --name carelink-bridge --env-file .env \
-  -v "$PWD/logindata.json:/app/logindata.json:ro" carelink-bridge
+  -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \
+  carelink-bridge
+docker cp logindata.json carelink-bridge:/app/logindata.json
+docker restart carelink-bridge
 
-# 2b. Or as part of the Nightscout stack.
+# 2b. Or as part of the Nightscout stack (same steps after `up`).
 cd deploy && docker compose up -d --build carelink-bridge
 ```
+
+**`CARELINK_STATE_FILE` must point into a mounted directory**, not at a mounted
+file, for the same atomic-write reason — `/data/state.json` under the
+`carelink-data` volume is a real directory, so the `rename` succeeds. Without
+it, `state.json` lands in `/app` and is lost when the container is recreated.
+
+**Re-login procedure**, which is the normal recovery path for a Docker
+deployment (the refresh token can be revoked at any time, e.g. by logging into
+the CareLink phone app):
+
+```bash
+cd ~/carelink-bridge
+npm run login                                  # host; refuses if logindata.json already exists
+docker cp logindata.json carelink-bridge:/app/logindata.json
+docker restart carelink-bridge
+```
+
+`npm run login` exits early with `logindata.json already exists` if the file is
+still there — delete the host copy first if you are deliberately re-logging in.
+The `docker cp` above is the write path that is verified working: a `docker cp`
+into the running container followed by a refresh writes fine, because `/app` is
+a normal writable directory in the image (it is `chown`ed to `node`).
+
 
 Health: the image sets `CARELINK_METRICS_PORT=8081` by default so the
 container-level `HEALTHCHECK` can probe the loopback-only `/healthz`

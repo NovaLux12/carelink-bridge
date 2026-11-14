@@ -112,7 +112,10 @@ back if you hit a confusing word.
 ## Step 1: Install Node.js
 
 The bridge is written in TypeScript and runs on Node.js. You need
-**Node 20 or newer**.
+**Node 22.12 or newer**. (Earlier versions of this guide said Node 20. That
+became wrong on 2026-11-13: `puppeteer-core@25` is now a *runtime* dependency
+and requires Node ≥ 22.12, so `package.json` declares `"node": ">=22.12.0"` and
+the installer refuses to run below it.)
 
 **Check if you already have it.** Open a terminal and type:
 
@@ -120,17 +123,40 @@ The bridge is written in TypeScript and runs on Node.js. You need
 node --version
 ```
 
-If you see something like `v20.x.x` or `v22.x.x`, skip to the
-next step. If you see `command not found` or a version below 20,
-install Node:
+If you see `v22.12.x` or higher (or `v24.x.x`), skip to the next step. If you
+see `command not found`, or anything below 22.12, install Node:
 
 - **Windows / macOS:** download the LTS installer from
   <https://nodejs.org/>. Run it. Accept the defaults. Open a
   **new** terminal window when it's done.
-- **Linux:** use your package manager (`apt install nodejs npm`
-  on Debian / Ubuntu, `dnf install nodejs npm` on Fedora,
-  `pacman -S nodejs npm` on Arch). Or use
-  [nvm](https://github.com/nvm-sh/nvm) if you prefer.
+- **Debian / Ubuntu / Raspberry Pi OS:** **do not use `apt install nodejs`.**
+  Every stable release of Debian, Ubuntu and Raspberry Pi OS ships Node 18 or
+  older, which this bridge cannot run, and the installer will stop with a
+  version error. Use the NodeSource repository instead:
+
+  ```bash
+  # Node 22 LTS on Debian/Ubuntu/Raspberry Pi OS
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+  sudo apt install -y nodejs
+  ```
+
+  (Or download the official tarball / installer from
+  <https://nodejs.org/en/download>.)
+- **Fedora:** `sudo dnf install nodejs` may also be too old; check
+  `node --version` afterwards and use NodeSource or the tarball if so.
+- **Arch:** `sudo pacman -S nodejs npm`.
+
+**If you use nvm, read this before you start.** nvm installs Node somewhere
+under your home directory (`~/.nvm/versions/node/vX/bin/node`) and puts it on
+your `PATH` from your shell profile. The systemd unit this project ships
+hardcodes `ExecStart=/usr/bin/node` (`deploy/systemd/carelink-bridge.service`),
+so a service started from an nvm install fails immediately with
+`status=203/EXEC` and **nothing in the journal naming the cause**. Pick one:
+
+- Install Node system-wide (NodeSource/tarball, above) and don't use nvm for
+  this; or
+- keep nvm and edit the unit's `ExecStart` to the absolute path of the node
+  binary (`command -v node`) after installing.
 
 Verify the install:
 
@@ -139,9 +165,9 @@ node --version
 npm --version
 ```
 
-You should see two version numbers. **Node must be 20 or higher.**
-npm's version is separate and much smaller — npm 10 or 11 on a
-Node 20+ install — so do not compare it to 20; it only needs to
+You should see two version numbers. **Node must be 22.12 or higher.**
+npm's version label is separate and much smaller — npm 10 or 11 on a
+Node 22 install — so do not compare it to 22.12; it only needs to
 exist and work.
 
 ## Step 2: Get the bridge code
@@ -197,7 +223,17 @@ Copy the example config file and edit it:
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
+
+**The `chmod 600` is not optional.** `cp` creates the file world-readable
+(mode 644 under the usual umask), and `.env` holds your CareLink password and
+your Nightscout API secret. `600` means only your user can read it. (This
+guide omitted the step until 2026-11-14, and only mentioned it in the
+pre-pump checklist — see [SECURITY.md](./SECURITY.md), which claims careful
+`0600` handling for tokens.) Re-check it after any edit: some editors save by
+writing a new file, which resets the mode. `ls -l .env` should show
+`-rw-------`.
 
 Now open the new `.env` file in any text editor. (Notepad on
 Windows, TextEdit on macOS — but make sure TextEdit is in
@@ -232,9 +268,12 @@ NS=https://your-nightscout-site.example.com
 MMCONNECT_SERVER=US
 ```
 
-The default is `EU` (Europe). If you're not sure, leave it as
-`EU` and run `npm run doctor` (next step) — it will tell you
-if the wrong region is the problem.
+The default is `EU` (Europe). `npm run doctor` will **not** tell you if this is
+wrong: its `CareLink reachable` check prints "Discovery endpoint reachable (EU
+region)" whenever the host answers HTTP 200, and both hosts answer 200 from
+anywhere — the EU/US split only selects which hostname and metadata is used
+(see [ADR 0002](./docs/adr/0002-discovery-app-version-pin.md)). If you are
+unsure, set it explicitly rather than expecting the doctor to catch it.
 
 **Save the file.** Don't share it with anyone. Don't paste it
 into chat. Don't commit it to git (the bridge's `.gitignore`
@@ -258,8 +297,15 @@ ending with `All checks passed — ready to run "npm start".`
   accepted.
 
 If anything fails, the doctor will tell you exactly what.
-This is the fastest way to find setup problems — run it any
-time something seems off.
+
+**What it does not check** (worth knowing before you trust a green result):
+it never attempts a login, so it cannot see an MFA/CAPTCHA failure; it makes no
+data call, so it cannot distinguish a `204`, a `206 Upgrade application`, or a
+stale-but-200 response; and it probes the discovery document only, not the
+cumulus data track. A missing `logindata.json` is reported as `!` (warning),
+not `✗`, and does **not** change the exit code — so a green doctor is not proof
+the bridge can fetch. `npm run doctor` proves config, reachability and the
+Nightscout secret; nothing more.
 
 ## Step 6: Log into CareLink
 
@@ -298,9 +344,21 @@ automatically.
 npm start
 ```
 
-Expected output: a few lines of startup messages, then either
-silence (with `CARELINK_QUIET=true`, the default) or a
-log line every 5 minutes. The bridge is now running.
+**Expected output at the default settings (`CARELINK_QUIET=true`): nothing, or
+at most a warning.** Every startup line — "Starting — interval set to 300s",
+"Fetching data now…", "Fetch succeeded" — is an `info` line, and `info` is
+verbose-gated, so it is not printed at the default. Silence here is success,
+not a hang. (This guide used to say "a few lines of startup messages, then
+silence"; those lines only appear with `CARELINK_QUIET=false`.)
+
+If you want to *see* it working, start it once with logging on:
+
+```bash
+CARELINK_QUIET=false npm start
+```
+
+That prints the startup lines plus a summary every 5 minutes. It also prints
+your full upload payload, so use it to confirm and then go back to the default.
 
 **To stop it:** press `Ctrl+C` in the terminal. The bridge
 shuts down cleanly.
@@ -426,6 +484,13 @@ If your pump hasn't arrived yet, you can still get everything else ready so data
 2. **Nightscout** — bring up your Nightscout site and confirm it responds (`curl https://your-nightscout/api/v1/status.json` → `200`); note the exact `NS` URL and `API_SECRET` — they must match the bridge's `.env`.
 3. **Pre-flight without a pump** — `npm run doctor` should show `✓` for `Config (.env)`, `CareLink reachable`, `Nightscout reachable`, and `Nightscout API secret`. `CareLink login (logindata.json)` will show `!` (warn) until you have logged in — expected before pairing, and expected again before you run `npm run login`.
 4. **Day the pump arrives** — pair the pump in the CareLink app, then `cd ~/carelink-bridge && npm run login` (one-time OAuth), `systemctl --user start carelink-bridge`, `journalctl --user -u carelink-bridge -f` and watch for `Fetch succeeded` within ~10 s; check `https://your-nightscout/api/v1/entries.json?count=10` for fresh SGVs.
+
+   **`Fetch succeeded` only appears with `CARELINK_QUIET=false`** — it is an
+   `info` line, and `info` is suppressed at the default setting, so a healthy
+   service with a silent journal looks identical to a wedged one. Either restart
+   the unit with `CARELINK_QUIET=false` added to `.env` for this check (then
+   remove it), or judge by the Nightscout entries above, which is the
+   observable that does not depend on log verbosity.
 
 Full runbook: [deploy/README.md](./deploy/README.md).
 ## Proxy / firewall support

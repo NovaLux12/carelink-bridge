@@ -39,7 +39,7 @@ dependency), write an ADR in `docs/adr/` first. The
 3. Make the change.
 4. Make sure `npm test` and `npm run typecheck` pass. (`npx tsc --noEmit`
    on its own does not typecheck test files — use the script.)
-5. Open a PR against `main`. CI runs on Node 20 and 22.
+5. Open a PR against `main`. CI runs on Node 22 and 24.
 6. Wait for review. We'll try to respond within a week.
 
 ## Ground rules
@@ -87,10 +87,17 @@ These are not negotiable:
 ## Branch protection
 
 `main` is protected. Every change goes through a PR with
-required CI checks (`ci (20)`, `ci (22)` — the job was renamed
-from `test` to `ci` in
+required CI checks (the job was renamed from `test` to `ci` in
 [#45](https://github.com/NovaLux12/carelink-bridge/pull/45), and
-the required contexts follow the job name). The
+the required contexts follow the job name).
+
+⚠ **The required contexts are currently `ci (20)` and `ci (22)`, while the CI
+matrix is `[22, 24]`** (verified against the live branch-protection config
+2026-11-14). Node 20 was dropped from the matrix when the floor moved to 22.12
+(ADR 0007), so `ci (20)` never reports and `ci (24)` is not required — meaning a
+PR can sit blocked on a check that cannot run, and the Node 24 leg is not gating
+merges. This is a repository-settings fix (`ci (22)`, `ci (24)`), not a docs fix;
+it is recorded here so the mismatch is not mistaken for a flaky check. The
 `enforce_admins` flag is on, so even the maintainer can't
 push directly. See [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md)
 for the rationale.
