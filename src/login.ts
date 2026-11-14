@@ -285,8 +285,38 @@ async function loginViaBrowser(
     executablePath: browserPath,
     headless: false,
     defaultViewport: null,
+    // Use the user's OWN browser profile, not a throwaway one.
+    //
+    // Without `userDataDir`, puppeteer-core creates a fresh temporary profile
+    // on every launch: no saved passwords, no password-manager extension, no
+    // autofill. The operator then has to copy a 25-character password out of
+    // 1Password by hand, every single time — reported in the field 2026-11-14
+    // as the worst part of the login flow.
+    //
+    // Pointing at the real profile means the password manager's browser
+    // integration works, and a session already established in that profile is
+    // reused.
+    //
+    // CAVEAT, deliberate: a reused session means this strategy may complete
+    // WITHOUT authenticating, so a successful run is not proof that the
+    // credential step works. That distinction matters when debugging — test
+    // with a clean profile if you need to prove authentication itself.
+    //
+    // `userDataDir` is opt-in via env so the old behaviour stays available
+    // (and so a shared/CI box can opt out); it is not automatic, because
+    // writing into a live browser profile is something an operator should be
+    // able to decline.
+    ...(process.env['CARELINK_BROWSER_PROFILE']
+      ? { userDataDir: process.env['CARELINK_BROWSER_PROFILE'] }
+      : {}),
     args: ['--no-first-run', '--no-default-browser-check', '--window-size=500,700'],
   });
+  logger.info(
+    process.env['CARELINK_BROWSER_PROFILE']
+      ? 'Browser profile: ' + process.env['CARELINK_BROWSER_PROFILE']
+      : 'Browser profile: temporary (no saved passwords — set CARELINK_BROWSER_PROFILE to reuse yours)',
+    { component: 'login' },
+  );
 
   const page = (await browser.pages())[0] || await browser.newPage();
 

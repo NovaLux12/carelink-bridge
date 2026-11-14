@@ -232,7 +232,13 @@ export class CareLinkClient {
       region: this.serverName,
     }) as unknown as CareLinkUserInfo;
     const role = resp.data?.role?.toUpperCase() ?? '';
-    logger.log('getConnectData - currentRole:', role);
+    // INFO, not log. The role decides which data path is taken below
+    // (carepartner vs patient), and it is the first thing anyone debugging a
+    // 204-vs-200 discrepancy needs. At the default CARELINK_QUIET=true a
+    // `logger.log` here is invisible, so an operator could not tell which
+    // branch the bridge chose. Verified live 2026-11-14: a patient account
+    // reports `PATIENT_OUS` from /patient/users/me.
+    logger.info('Account role: ' + (role || '(absent)'), { component: 'bridge', role });
     if (this.currentUser?.username && this.currentUser.username !== this.options.username) {
       logger.log(
         'CareLink reports username "' + this.currentUser.username +

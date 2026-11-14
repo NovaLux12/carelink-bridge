@@ -422,6 +422,25 @@ cheapest checks that need a real account token, in order:
    from 2026-09-20 with no recorded run since, so a post-September pin
    drift would not show up in it. Re-running `npm run login` is still the
    check; the open question is narrower than it was.
+
+   **Both of those are now closed (2026-11-14), and one of them the hard way.**
+   Run on a real account, on macOS, against the live tenant:
+
+   - ✅ **Strategy 2 is proven.** Browser login → PKCE code → token exchange →
+     `logindata.json` written 0600. First recorded success. MFA did **not**
+     appear for this account.
+   - ✅ **The discovery pin still works.** `…/v13/discover/android/3.6` → 200,
+     SSO config resolves to `carepartner_auth0_ous_sso_config_v1.json`.
+   - ❌ **Strategy 1 cannot work at all, for anyone.** Auth0's Universal Login
+     serves a JavaScript-rendered page with **no `<form>` element**; the
+     automated path scrapes hidden inputs and POSTs to the form action, so it
+     fails before MFA is ever reached. Measured and documented in
+     [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#strategy-1-is-broken-and-the-reason-is-structural-measured-2026-11-14).
+     The old "expect Strategy 1 to fail on MFA" framing was wrong about the
+     cause, not just the frequency.
+
+   Evidence: findings-log `2026-11-14-first-authenticated-login` in
+   [carelink-api-research](https://github.com/NovaLux12/carelink-api-research).
 2. **`GET /api/carepartner/v2/users/me` vs `GET /patient/users/me`.**
    Both answer `401` without a token, so **which one actually returns
    data with a valid token is unknown** — and that is the open question
