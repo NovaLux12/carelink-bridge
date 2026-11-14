@@ -204,18 +204,28 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
         ? 'treatments'
         : 'devicestatus';
     metrics.incUpload(kind, stored);
-    // Report what was STORED, not what was sent. Nightscout dedups entries on
-    // (sysTime, type) by upsert, so a re-post silently updates an existing row
-    // and the stored count can legitimately be lower than the sent count. Any
-    // gap is worth seeing rather than assuming.
+    // What the count means, precisely.
+    //
+    // CORRECTED 2026-11-13: this used to say "Report what was STORED, not what
+    // was sent" and treat a gap as evidence of dedup. That was wrong.
+    // Nightscout's POST response is the request ECHOED back, not the stored set
+    // — `lib/server/treatments.js:163` returns `objOrArray`,
+    // `devicestatus.js:159,170` returns `statuses` including the re-sent copies
+    // it did not insert, and `entries` returns `docs`. So `stored` equals
+    // `items.length` in the normal case and the gap branch below is
+    // effectively unreachable.
+    //
+    // The load-bearing check lives in `upload()`: it throws when Nightscout
+    // answers 200 but stores none of a non-empty payload, which is the
+    // silent-discard case that matters. This log is accounting, not proof.
     if (stored !== items.length) {
       logger.info(
-        'Upload stored ' + stored + ' of ' + items.length + ' item(s) — the rest ' +
-          'were duplicates or discarded',
-        { endpoint, sent: items.length, stored },
+        'Nightscout accepted ' + stored + ' of ' + items.length + ' item(s) in the ' +
+          'response — the remainder were dropped server-side',
+        { endpoint, sent: items.length, accepted: stored },
       );
     } else {
-      logger.info('Upload succeeded', { endpoint, count: stored });
+      logger.info('Upload accepted', { endpoint, count: stored });
     }
   } catch (err) {
     // Continue even if Nightscout can't be reached

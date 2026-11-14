@@ -30,6 +30,12 @@ export interface NightscoutLastAlarmAnnotation {
 }
 
 export interface NightscoutDeviceStatus {
+  /**
+   * Deterministic 24-hex id, so a re-sent devicestatus UPDATES instead of
+   * appending. Nightscout's devicestatus `create()` only skips a record whose
+   * `_id` is a 24-hex string; with none it runs `insertMany` every POST.
+   */
+  _id?: string;
   created_at: string;
   device: string;
   uploader: {
@@ -74,10 +80,36 @@ export interface NightscoutDeviceStatus {
     };
     clock: string;
     /**
+     * Delivery status, as Nightscout's pump plugin actually reads it.
+     *
+     * `lib/plugins/pump.js:284-293` (v15.0.9) renders `pump.status.suspended`
+     * and `pump.status.bolusing`. That makes this the ONE suspend field
+     * Nightscout surfaces — and before it existed here, the bridge published
+     * `autoMode.suspendFired` instead, which has ZERO hits anywhere in the
+     * Nightscout repo. So a genuine "delivery stopped" fact landed somewhere
+     * nothing read, while the field that would have shown up on the pump pill
+     * was never written.
+     *
+     * `suspended` is set ONLY from an explicit `true` in the payload, and is
+     * omitted (never `'Normal'`) otherwise: absent stays absent. Asserting a
+     * running pump is a claim we cannot make from a missing field.
+     */
+    status?: {
+      suspended?: 'Suspended';
+      bolusing?: 'Bolusing';
+    };
+    /**
      * SmartGuard auto-mode state, passed through from
      * `therapyAlgorithmState`. `suspendFired` is `null`, not `false`, when
      * `plgmLgsState` is a token outside the recorded vocabulary — see
      * describeAutoMode() in src/transform/index.ts.
+     *
+     * SCOPE — verified 2026-11-13 against nightscout/cgm-remote-monitor
+     * v15.0.9: `autoMode`, `plgm`, `shieldState` and `suspendFired` all return
+     * ZERO hits in that repo. This is the same dead-letter category as
+     * `last_alarm` above. Kept deliberately as the raw-evidence record (it is
+     * the faithful transcript of what the pump said), but it is NOT the safety
+     * path — `status.suspended` above is.
      */
     autoMode?: {
       shieldState?: string;

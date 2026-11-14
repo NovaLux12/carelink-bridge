@@ -327,6 +327,56 @@ export interface AutoModeSnapshot {
 }
 
 /**
+ * A stable 24-hex Nightscout `_id` for a devicestatus record.
+ *
+ * Nightscout's devicestatus `create()` only skips a duplicate whose `_id` is a
+ * 24-hex string; with no `_id` it inserts on every POST (see the call site).
+ * The value is the device-update time floored to the minute, hashed into the
+ * 12-byte hex form Mongo uses — so a re-send within the same minute updates in
+ * place, and a new fetch a minute later is a new document.
+ *
+ * Falling back to `0` for a non-finite time keeps a deterministic id: the
+ * alternative is an id that changes per call, which is the bug this fixes.
+ */
+export function deviceStatusId(deviceUpdateAtMs: number): string {
+  const bucket = Number.isFinite(deviceUpdateAtMs)
+    ? Math.floor(deviceUpdateAtMs / 60_000)
+    : 0;
+  // 24 hex chars == 12 bytes, the shape Mongo's ObjectId string takes and the
+  // shape Nightscout's hex check accepts.
+  return bucket.toString(16).padStart(24, '0').slice(-24);
+}
+
+/**
+ * The delivery-status block Nightscout actually renders.
+ *
+ * `lib/plugins/pump.js:284-293` (cgm-remote-monitor v15.0.9) reads
+ * `pump.status.suspended` and `pump.status.bolusing` — and nothing else in that
+ * repo reads any suspend field. The bridge used to publish only
+ * `autoMode.suspendFired`, which returns zero hits there, so a real
+ * "not delivering" fact was invisible on the pump pill.
+ *
+ * Two independent sources mean suspended:
+ *   1. `medicalDeviceSuspended: true` — the pump's own report.
+ *   2. `autoMode.suspendFired === true` — SmartGuard took basal away
+ *      (plgmLgsState SUSPEND_FIRED_PLGM / SUSPEND_FIRED_LGS).
+ *
+ * `suspendFired` is `boolean | null`, where null means "a token we do not
+ * recognise" — that is NOT a suspend, and is deliberately not treated as one.
+ *
+ * Returns undefined when neither source says suspended, so `status` is absent
+ * rather than asserting a running pump. Absent stays absent.
+ */
+export function suspendStatus(
+  data: { medicalDeviceSuspended?: boolean },
+  autoMode: AutoModeSnapshot | undefined,
+): { status: { suspended: 'Suspended' } } | undefined {
+  if (data.medicalDeviceSuspended === true) return { status: { suspended: 'Suspended' } };
+  if (autoMode?.suspendFired === true) return { status: { suspended: 'Suspended' } };
+  return undefined;
+}
+
+/**
  * Describe `therapyAlgorithmState` without translating it.
  *
  * The tokens are passed through verbatim: they were recovered from the
@@ -475,8 +525,24 @@ function deviceStatusEntry(
     ? data.lastMedicalDeviceDataUpdateServerTime
     : newestReadingTime(data);
 
+  // A stable 24-hex `_id`, because without one Nightscout appends on every poll.
+  //
+  // `lib/server/devicestatus.js` (v15.0.9) only skips a record whose `_id` is a
+  // 24-hex string (lines 57-59, 75); with no `_id` at all it runs `insertMany`
+  // every POST. The bridge's in-memory recency filter hides this during a run,
+  // but it persists nothing, so every restart re-inserts too — unbounded growth
+  // at ~288 docs/day on a 5-minute poll.
+  //
+  // The value is the device-update time snapped to the poll's own minute, so
+  // re-sending the same payload in the same minute updates rather than appends,
+  // while a genuine new fetch a minute later is a genuinely new record. That is
+  // also why this is derived from the payload clock rather than `Date.now()`:
+  // the latter would mint a new id on every re-send and defeat the purpose.
+  const statusId = deviceStatusId(deviceUpdateAt);
+
   if (family === 'GUARDIAN') {
     return {
+      _id: statusId,
       created_at: timestampAsString(deviceUpdateAt),
       device: deviceName(data),
       uploader: {
@@ -502,6 +568,7 @@ function deviceStatusEntry(
   }
 
   return {
+    _id: statusId,
     created_at: timestampAsString(deviceUpdateAt),
     device: deviceName(data),
     uploader: {
@@ -543,6 +610,16 @@ function deviceStatusEntry(
       // a value outside the recorded vocabulary is data, not corruption, and a
       // consumer should be able to see it.
       ...(autoMode ? { autoMode } : {}),
+      // The delivery-status field Nightscout's pump plugin actually renders
+      // (lib/plugins/pump.js:284-293). Two independent sources say "not
+      // delivering": the pump reporting a user suspend, and SmartGuard's own
+      // suspend. Either is enough.
+      //
+      // `bolusing` is deliberately NOT emitted. The payload has no trustworthy
+      // "a bolus is running right now" field — `activeInsulin` is a decayed
+      // total, not a delivery flag — and inventing one would put a fabricated
+      // state on the pump pill.
+      ...(suspendStatus(data, autoMode) ?? {}),
     },
     connect: {
       sensorState: data.sensorState,

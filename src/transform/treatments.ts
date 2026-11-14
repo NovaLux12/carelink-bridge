@@ -300,6 +300,17 @@ export function mapMarkers(
       _id: treatmentId(created, eventType, carbs, insulin, occurrence),
       eventType,
       created_at: new Date(created).toISOString(),
+      // `timestamp` as well as `created_at`, because Loop requires it.
+      //
+      // LoopKit's `NightscoutTreatment.init?` guards on `entry["timestamp"] as
+      // String` and is FAILABLE — it returns nil without it, so Loop silently
+      // discards every treatment this bridge uploads. Nightscout itself never
+      // synthesises the field: `lib/server/treatments.js` (v15.0.9) contains
+      // zero writes of `timestamp`, so `created_at` alone is not enough.
+      // AAPS is unaffected (it falls back `date ?: mills ?: timestamp ?:
+      // created_at`, RemoteTreatment.kt:114), which is why this went unnoticed.
+      // Same value as `created_at` deliberately: one event, one time.
+      timestamp: new Date(created).toISOString(),
       enteredBy: 'carelink-bridge',
       notes: 'carelink-marker',
     };
@@ -395,6 +406,14 @@ export function mapMarkers(
       if (treatment) {
         treatment.glucose = round(glucose);
         treatment.glucoseType = 'Finger';
+        // `units` because Loop requires it. `BGCheckNightscoutTreatment
+        // .fromServer` reads `entry["units"] as String` and is failable, so
+        // without this Loop discards every fingerstick as well as every carb
+        // event. The value is what the bridge actually published: `glucose` has
+        // already been normalised to mg/dL by `round(glucose)` off the raw
+        // marker, which for a BG marker is always mg/dL in CareLink's own
+        // vocabulary — a mmol/L account is converted on the SGV path, not here.
+        treatment.units = 'mg/dL';
       }
       continue;
     }
