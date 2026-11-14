@@ -25,7 +25,7 @@ is to answer three questions and write the answers down:
 ```bash
 npm ci
 npm run typecheck
-npm test          # expect 594 passing across 40 files
+npm test          # expect 614 passing across 43 files
 npm run doctor
 ```
 

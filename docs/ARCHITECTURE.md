@@ -902,8 +902,12 @@ from the vendor's own client parser, so they are covered by
 `treatments.test.ts`, `auto-mode-diagnostics.test.ts` and
 `payload-census.test.ts` against *modelled* payloads, not captured ones.
 Still genuinely uncovered and tracked in [ROADMAP.md](../ROADMAP.md):
-the `limits[]` BG-target schedule, the NGP-tier alarm **display strings**
-(blocked on a token, not a pump), and multi-patient fan-out.
+the `limits[]` BG-target schedule and multi-patient fan-out. The NGP-tier alarm
+**display strings** were listed here as *"blocked on a token, not a pump"* —
+**corrected 2026-11-13: they were never token-gated.** They are one
+unauthenticated `GET` of `{base.uri}/ocl/{version}/i18n/ui/app/en.json`
+(137,123 B, sha256 `a6b8180b…`), and this bridge now tiers alarms against the
+vendor's own strings in `src/last-alarm.ts`.
 
 ## How to add a regression test
 

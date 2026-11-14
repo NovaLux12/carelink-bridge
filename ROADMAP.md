@@ -177,9 +177,19 @@ below. Treat this paragraph as the July 2026 position, not the current one.
 > reading the hash-pinned eager bundle found none of it.
 >
 > What is still genuinely blocked on a fixture: `limits[]` (the BG-target
-> schedule) and multi-patient fan-out. What is blocked on a *token*, not
-> a pump: the NGP alarm display strings, which live in i18n bundles the
-> research repo has not yet fetched.
+> schedule) and multi-patient fan-out.
+>
+> ~~What is blocked on a *token*, not a pump: the NGP alarm display strings,
+> which live in i18n bundles the research repo has not yet fetched.~~
+> **CORRECTED 2026-11-13 — that was wrong, and it was never token-gated.** The
+> alarm display strings are a static, unauthenticated file:
+> `{personal.crm.settings.base.uri}/ocl/{…version}/i18n/ui/app/{locale}.json`
+> (200, 137,123 B, sha256 `a6b8180b…`, byte-identical on `carelink.minimed.eu`
+> and `.com`; 63 `connect.ble.<code>` codes). This bridge now tiers alarms
+> against those strings — see `src/last-alarm.ts` and
+> `test/alarm-severity-vs-vendor-text.test.ts`. What remains token-gated is
+> **population**, not vocabulary: whether a real 780G sends these codes at all.
+> Recorded in `carelink-api-research` findings-log `2026-11-13-i18n-display-strings-bundle`.
 
 **2026-10-08 update (unauthenticated re-probe):** the watch
 itself is unchanged. Across all 109 country-settings
