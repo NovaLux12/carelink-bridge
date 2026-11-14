@@ -55,6 +55,33 @@ export const MARKER_SLOT_MS = 300_000;
 export const MARKER_LAST_SLOT = 287;
 
 /**
+ * Snap a marker anchor onto the marker slot grid.
+ *
+ * `markerTime()` places a marker at `anchor − (287 − index) × 300_000`, so a
+ * marker's derived time inherits whatever sub-slot residue the anchor carries.
+ * The anchor is `lastMedicalDeviceDataUpdateServerTime`, a raw server
+ * millisecond value that is NOT slot-aligned (real fixtures carry residues of
+ * 170_381 ms and 275_436 ms), and CareLink re-sends the same rolling 24 h of
+ * markers on every poll with the anchor drifting by a couple of seconds.
+ *
+ * That made `treatmentId()` unstable: measured, one physical meal (index 280,
+ * then 279, 7 s of anchor jitter) produced `carelink-marker-7890e2…` at
+ * 11:25:00.381Z and `carelink-marker-5633cf…` at 11:25:02.881Z. Nightscout
+ * dedups treatments on `_id` alone, so every poll appended another row for the
+ * same meal — and its IOB/COB sums then counted that insulin and those carbs
+ * twice, in the app people dose from.
+ *
+ * Quantising the anchor here makes both the `_id` and `created_at` land on the
+ * same value for the same physical marker across polls. Flooring (not rounding)
+ * is deliberate: the anchor means "the newest slot", so it belongs to the slot
+ * it sits in.
+ */
+export function quantiseAnchor(anchorMs: number): number {
+  if (!Number.isFinite(anchorMs)) return anchorMs;
+  return Math.floor(anchorMs / MARKER_SLOT_MS) * MARKER_SLOT_MS;
+}
+
+/**
  * Derive a marker's absolute time.
  *
  * `index` is a slot in a 288-slot window whose last slot (287) is the anchor.
@@ -181,7 +208,10 @@ export function mapMarkers(
     undatable: 0,
   };
   if (!Array.isArray(markers) || markers.length === 0) return out;
-  if (!Number.isFinite(anchorMs)) {
+  // Snap once, here, so every marker in this payload is dated off the same
+  // slot-aligned grid — see quantiseAnchor() for why the raw anchor is unusable.
+  const alignedAnchor = quantiseAnchor(anchorMs);
+  if (!Number.isFinite(alignedAnchor)) {
     // Every marker in the array is undatable; report the population rather than
     // silently returning nothing and looking like "no markers this fetch".
     out.undatable = markers.length;
@@ -261,7 +291,7 @@ export function mapMarkers(
     carbs?: number,
     insulin?: number,
   ): Record<string, unknown> | null => {
-    const created = markerTime(m.index, anchorMs);
+    const created = markerTime(m.index, alignedAnchor);
     if (created === null) { out.undatable++; return null; }
     const key = `${created}|${eventType}|${carbs ?? ''}|${insulin ?? ''}`;
     const occurrence = seen.get(key) ?? 0;
@@ -299,7 +329,7 @@ export function mapMarkers(
   };
 
   for (const meal of meals) {
-    const datable = markerTime(meal.index, anchorMs) !== null;
+    const datable = markerTime(meal.index, alignedAnchor) !== null;
     // Only consume a bolus for a meal that actually reaches the output.
     // Otherwise an undatable meal swallowed a datable bolus and the insulin
     // vanished with no count anywhere.

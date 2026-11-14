@@ -67,15 +67,35 @@ describe('alarm coverage against the vendor table', () => {
     }
   });
 
-  it('every non-critical vendor code is tiered delivery_stopped, never other', () => {
-    // This is the assertion that would have caught the original defect: 53 of
-    // these were falling through to `other`.
+  it('every non-critical vendor code is tiered from the vendor text, never silently dropped', () => {
+    // CORRECTED 2026-11-13. The previous assertion required every non-critical
+    // vendor code to be `delivery_stopped`, on the assumption that a
+    // non-critical vendor group implies stopped delivery. The vendor's own
+    // display strings disprove that: 006 is "Pump Battery Out Limit", 062 is
+    // "New notification received from CareLink". Requiring delivery_stopped for
+    // all 66 made a battery reminder log a priority-1 "Delivery stopped".
+    //
+    // The invariant that actually holds — and the one worth pinning — is that
+    // no vendor code is DROPPED and every one carries vendor text. Severity
+    // follows text; see the tiering test in last-alarm.test.ts.
     expect(vendorNonCritical).toHaveLength(66);
     const fellThrough = vendorNonCritical.filter((code) => {
       const r = evaluateLastAlarm(alarm(code));
-      return r!.severity === 'other';
+      return r!.severity === 'other' && !/^New notification received/.test(r!.text) && code !== 51;
     });
-    expect(fellThrough, `codes annotated 'other': ${fellThrough.join(', ')}`).toEqual([]);
+    expect(fellThrough, `unexpectedly silent codes: ${fellThrough.join(', ')}`).toEqual([]);
+  });
+
+  it('no vendor code that says "Delivery Stopped" is tiered below delivery_stopped', () => {
+    // The safety direction. If the vendor's own string claims stopped delivery
+    // and the bridge tiered it `other`, an operator never sees it. Measured
+    // before this change: 809 and 810 were exactly that.
+    const stopped = vendorCodes.filter((c) => /Delivery Stopped/i.test(
+      evaluateLastAlarm(alarm(c))!.text,
+    ));
+    expect(stopped.length).toBeGreaterThan(0);
+    const missed = stopped.filter((c) => evaluateLastAlarm(alarm(c))!.severity === 'other');
+    expect(missed, `says Delivery Stopped but tiered other: ${missed.join(', ')}`).toEqual([]);
   });
 
   it('no vendor code produces "Unknown alarm code" text', () => {

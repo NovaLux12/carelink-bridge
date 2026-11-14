@@ -26,7 +26,7 @@ export interface NightscoutLastAlarmAnnotation {
   text: string;
   // Severity drives log level and downstream handling. 'stop_using_pump'
   // is load-bearing safety information regardless of any other annotation.
-  severity: 'stop_using_pump' | 'delivery_stopped' | 'other';
+  severity: 'stop_using_pump' | 'delivery_stopped' | 'attention' | 'other';
 }
 
 export interface NightscoutDeviceStatus {
@@ -115,4 +115,16 @@ export interface TransformResult {
    * `markers[]`, which is normal for a CGM-only account.
    */
   treatments: Record<string, unknown>[];
+  /**
+   * Set when the payload was refused because its own device clock says the data
+   * is older than the staleness threshold.
+   *
+   * This exists so the fetch loop can tell "nothing to say" from "everything
+   * rejected as stale". Without it the loop sees an empty but successful
+   * transform, counts a success, and RESETS the stale watchdog that exists to
+   * catch exactly this case — a pump that stopped syncing looks healthy.
+   */
+  stale?: boolean;
+  /** How old the refused payload was, in minutes. Present only when stale. */
+  staleMinutes?: number;
 }

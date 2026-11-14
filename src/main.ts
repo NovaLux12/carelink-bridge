@@ -12,6 +12,7 @@ import { CareLinkClient } from './carelink/client.js';
 import { transform } from './transform/index.js';
 import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
+import { isUsablePayload } from './payload-shape.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
 import type { UploadEndpoint } from './metrics.js';
@@ -230,15 +231,30 @@ async function requestLoop(): Promise<void> {
     try {
       const data = await client.fetch();
 
-      if (!data?.lastMedicalDeviceDataUpdateServerTime) {
+      if (!isUsablePayload(data)) {
         metrics.incFetch('failure');
         logger.warn('Empty or invalid data from CareLink', { component: 'bridge', keys: Object.keys(data || {}).length });
       } else {
+        const transformed = transform(data, config.sgvLimit);
+
+        if (transformed.stale) {
+          // CareLink answered 200 with data that is older than the threshold.
+          // Count it honestly and do NOT advance the success clock: resetting
+          // lastSuccessTimestamp / staleNotified here is what made the stale
+          // watchdog unable to fire for the case it was built for.
+          metrics.incFetch('failure');
+          metrics.observeFetchDuration(Date.now() - t0);
+          metrics.setCircuitOpen(client.isCircuitOpen());
+          checkStale();
+          if (shuttingDown) break;
+          await sleep(config.interval, abortSignal);
+          continue;
+        }
+
         metrics.incFetch('success');
         metrics.setLastSuccess(Date.now());
         metrics.observeFetchDuration(Date.now() - t0);
 
-        const transformed = transform(data, config.sgvLimit);
         const newSgvs = filterSgvs(transformed.entries);
         const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
         // Treatments carry a deterministic _id (see transform/treatments.ts), so

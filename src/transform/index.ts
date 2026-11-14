@@ -558,6 +558,27 @@ function deviceStatusEntry(
   };
 }
 
+/**
+ * `kind` tokens that mean "this reading is NOT sensor glucose".
+ *
+ * Deliberately a small allowlist of KNOWN non-SG vocabulary rather than an
+ * accept-list of `'SG'`: the wire form has never been observed on the
+ * display/message route, so an unknown token is more likely to be glucose under
+ * a name we have not met than to be a calibration. Known calibration and
+ * meter-BG kinds are rejected because plotting those as sensor glucose would
+ * fabricate a reading the sensor never produced.
+ */
+const NON_SG_KINDS: ReadonlySet<string> = new Set([
+  'CAL',
+  'CALIBRATION',
+  'BG',
+  'METER',
+]);
+
+function isNonSgKind(kind: unknown): boolean {
+  return typeof kind === 'string' && NON_SG_KINDS.has(kind.toUpperCase());
+}
+
 function sgvEntries(
   data: CareLinkData,
   offset: string,
@@ -569,7 +590,23 @@ function sgvEntries(
 
   const sgvs: NightscoutSGVEntry[] = [];
   for (const sgv of data.sgs) {
-    if (sgv.kind !== 'SG' || sgv.sg === 0) continue;
+    // `kind` is a GUESS: it is typed required in types/carelink.ts, but it has
+    // never been observed on the display/message route — the route this bridge's
+    // v0.3 line exists to support. Measured: a payload with no `kind` produced
+    // 0 entries, and one with `kind: "sg"` produced 0 entries, i.e. a silent
+    // total glucose outage from a field-name assumption. So accept absence, and
+    // reject only a DIFFERENT known non-SG token.
+    if (sgv.kind !== undefined && sgv.kind !== null && sgv.kind !== 'SG') {
+      if (!isNonSgKind(sgv.kind)) {
+        // Unknown kind: fall through to the SGV path rather than dropping data.
+        logger.log('SGV with unrecognised kind, accepted as SG', {
+          kind: String(sgv.kind),
+        });
+      } else {
+        continue;
+      }
+    }
+    if (sgv.sg === 0) continue;
 
     // Precedence: `datetime` FIRST, then `timestamp`.
     //
@@ -606,8 +643,54 @@ function sgvEntries(
     });
   }
 
-  // Apply trend data to the most recent SGV
-  if (sgvs.length > 0 && data.sgs[data.sgs.length - 1].sg !== 0) {
+  // Sort ASCENDING by time before anything downstream reads a position.
+  //
+  // Two silent wrongs followed from the missing sort, both reproduced:
+  //   - the trend was attached to `sgvs[sgvs.length - 1]`, which for a
+  //     descending payload is the OLDEST reading — measured, trend "DoubleUp"
+  //     landed on sgv 90 while the newest (200) got none;
+  //   - `transform()` then does `.slice(-limit)`, so on a descending payload it
+  //     kept the OLDEST `limit` readings and discarded the newest — measured
+  //     with limit 2: kept [100, 90] and dropped 200.
+  //
+  // The cumulus path already sorts upstream; the legacy `connect/data` path
+  // does not, and that is the path whose ordering is unverified against a real
+  // account. Sorting here makes both paths agree.
+  sgvs.sort((a, b) => a.date - b.date);
+
+  // Apply the trend only when the payload's NEWEST slot actually carries a
+  // reading.
+  //
+  // `sg === 0` is the vendor's "no glucose at this slot" sentinel, and the
+  // newest slot can be empty while older readings are present — the legacy
+  // connect/data shape represents that as a trailing `sg: 0` entry, sometimes
+  // with an empty `datetime`. Attaching `lastSGTrend` then would label the last
+  // good reading with a trend belonging to a slot that has no reading, which is
+  // what the `missingLastSgv` fixture and "should not add a trend if the most
+  // recent sgv is absent" have always guarded.
+  //
+  // Two ways a slot can be the newest and empty, so both are checked:
+  //   - dated: a `sg: 0` entry whose time is at or after the newest real
+  //     reading (survives the sort, and is correct for a descending payload);
+  //   - undated: a `sg: 0` entry at the array tail with no parseable time,
+  //     which is positional — the wire array is slot-ordered.
+  const newestReading = sgvs.length > 0 ? sgvs[sgvs.length - 1].date : NaN;
+  const rawTail = data.sgs[data.sgs.length - 1];
+  const undatedEmptyTail =
+    rawTail !== undefined && rawTail.sg === 0 && !(rawTail.datetime ?? rawTail.timestamp);
+
+  const newestSlotIsEmpty =
+    sgvs.length > 0 &&
+    (undatedEmptyTail ||
+      data.sgs.some((s) => {
+        if (s.sg !== 0) return false;
+        const raw = s.datetime ?? s.timestamp ?? '';
+        if (!raw) return false;
+        const t = resolveReadingTime(raw, offsetMilliseconds, data);
+        return Number.isFinite(t) && t >= newestReading;
+      }));
+
+  if (sgvs.length > 0 && !newestSlotIsEmpty) {
     const trendData = CARELINK_TREND_TO_NIGHTSCOUT_TREND[data.lastSGTrend];
     if (trendData) {
       sgvs[sgvs.length - 1] = { ...sgvs[sgvs.length - 1], ...trendData };
@@ -632,8 +715,22 @@ export function transform(data: CareLinkData, sgvLimit?: number): TransformResul
       (data.currentServerTime - data.lastMedicalDeviceDataUpdateServerTime) / (60 * 1000);
 
     if (recency > STALE_DATA_THRESHOLD_MINUTES) {
-      logger.log('Stale CareLink data: ' + recency.toFixed(2) + ' minutes old');
-      return { devicestatus: [], entries: [], treatments: [] };
+      // WARN, not log. At the default CARELINK_QUIET=true, logger.log emits
+      // nothing, so this — the one condition the stale watchdog exists to catch
+      // — was silent. The return value also carries the verdict so the caller
+      // can refuse to count it as a healthy fetch.
+      logger.warn(
+        'Stale CareLink data: ' + recency.toFixed(2) + ' minutes old (> ' +
+          STALE_DATA_THRESHOLD_MINUTES + ' min) — payload refused',
+        { component: 'transform', staleMinutes: Number(recency.toFixed(2)) },
+      );
+      return {
+        devicestatus: [],
+        entries: [],
+        treatments: [],
+        stale: true,
+        staleMinutes: recency,
+      };
     }
   } else {
     logger.log(

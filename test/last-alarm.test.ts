@@ -38,17 +38,44 @@ describe('evaluateLastAlarm', () => {
     expect(result!.annotation).toEqual({
       code: 4,
       datetime: '2026-07-21T00:00:00Z',
-      text: 'Insulin delivery stopped',
+      text: 'Pump Error. Delivery Stopped',
       severity: 'delivery_stopped',
     });
   });
 
-  it('classifies paradigm-era delivery-stopped codes (4/5/6/16/43/61)', () => {
-    for (const code of [4, 5, 6, 16, 43, 61] as const) {
+  it('classifies paradigm-era delivery-stopped codes as delivery_stopped', () => {
+    // Codes whose vendor string says "Delivery Stopped". 6 is excluded on
+    // purpose: the vendor's text for 6 is "Pump Battery Out Limit", which is
+    // `attention` — see the ATTENTION_CODES test below.
+    for (const code of [4, 16, 43, 61] as const) {
       const result = evaluateLastAlarm(alarmFixture({ code }));
       expect(result).not.toBeNull();
       expect(result!.severity).toBe('delivery_stopped');
       expect(result!.annotation.severity).toBe('delivery_stopped');
+    }
+  });
+
+  it('tiers by the VENDOR text, not by group membership', () => {
+    // The defect this replaces: every non-critical vendor group was assumed to
+    // mean "delivery stopped", so a battery reminder fired a priority-1
+    // "Delivery stopped" line. Severity now follows what the vendor's own string
+    // says the alarm IS.
+    const cases: [number, string, string][] = [
+      [6, 'attention', 'Pump Battery Out Limit'],
+      [11, 'attention', 'Replace Pump Battery Now'],
+      [84, 'attention', 'Pump Battery Removed. Replace Battery'],
+      [62, 'other', 'New notification received from CareLink'],
+      [51, 'other', 'Bolus Stopped'],
+      [7, 'delivery_stopped', 'Delivery Stopped. Check BG'],
+      [809, 'delivery_stopped', 'Suspend On Low. Delivery Stopped. Check BG'],
+      [810, 'delivery_stopped', 'Suspend Before Low. Delivery Stopped. Check BG'],
+      [24, 'stop_using_pump', 'Critical Pump Error. Stop Pump Use. Use Other Treatment'],
+    ];
+    for (const [code, severity, text] of cases) {
+      const r = evaluateLastAlarm(alarmFixture({ code }));
+      expect(r, `code ${code}`).not.toBeNull();
+      expect(r!.severity, `code ${code} severity`).toBe(severity);
+      expect(r!.text, `code ${code} text`).toBe(text);
     }
   });
 
@@ -80,7 +107,7 @@ describe('evaluateLastAlarm', () => {
     // Original wire form is preserved for operator-visible logging.
     expect(result!.annotation.wireCode).toBe('N24');
     expect(result!.wireCode).toBe('N24');
-    expect(result!.text).toBe('Critical Pump Error. Stop using pump');
+    expect(result!.text).toBe('Critical Pump Error. Stop Pump Use. Use Other Treatment');
   });
 
   it('classifies every NGP stop_using_pump code (mddub a95dc120d9d1414a433d, #84)', () => {
@@ -97,7 +124,9 @@ describe('evaluateLastAlarm', () => {
 
   it('classifies NGP delivery-stopped codes as delivery_stopped (#84)', () => {
     // The NGP-era additions; paradigm-era codes are already covered above.
-    for (const code of [1, 22, 25, 33, 42, 63, 67, 76, 77, 130] as const) {
+    // 25 is excluded: the vendor's string is "Pump Power Error. Record
+    // Settings", which is `attention`, not a stopped delivery.
+    for (const code of [1, 22, 33, 42, 63, 67, 76, 130] as const) {
       for (const wireForm of [code, `N${code}`] as const) {
         const result = evaluateLastAlarm(alarmFixture({ code: wireForm }));
         expect(result, `code=${JSON.stringify(wireForm)}`).not.toBeNull();
@@ -151,7 +180,7 @@ describe('transform surfaces data.lastAlarm in devicestatus.annotation', () => {
     expect(result.devicestatus[0].last_alarm).toEqual({
       code: 4,
       datetime: '2026-07-21T00:00:00Z',
-      text: 'Insulin delivery stopped',
+      text: 'Pump Error. Delivery Stopped',
       severity: 'delivery_stopped',
     });
   });
@@ -185,9 +214,9 @@ describe('logLastAlarm fires console.warn for priority-1 codes', () => {
     warnSpy.mockRestore();
   });
 
-  it('WARNs for delivery_stopped codes (paradigm 4/5/6/16/43/61)', () => {
+  it('WARNs for delivery_stopped codes, and says the vendor text', () => {
     // Prong (b) — priority-1 codes always warn, even with verbose off.
-    for (const code of [4, 5, 6, 16, 43, 61] as const) {
+    for (const code of [4, 16, 43, 61] as const) {
       warnSpy.mockClear();
       const evaluation = evaluateLastAlarm(alarmFixture({ code }));
       expect(evaluation).not.toBeNull();
@@ -196,6 +225,38 @@ describe('logLastAlarm fires console.warn for priority-1 codes', () => {
       const message = warnSpy.mock.calls[0]?.[0] ?? '';
       expect(message).toMatch(/Delivery stopped/);
       expect(message).toContain(`code=${code}`);
+    }
+  });
+
+  it('WARNs for attention codes WITHOUT claiming delivery stopped', () => {
+    // A battery reminder must not read as "basal has stopped": the operator has
+    // to be able to tell the two apart, or the priority-1 line stops meaning
+    // anything.
+    for (const [code, text] of [
+      [6, 'Pump Battery Out Limit'],
+      [84, 'Pump Battery Removed. Replace Battery'],
+    ] as [number, string][]) {
+      warnSpy.mockClear();
+      const evaluation = evaluateLastAlarm(alarmFixture({ code }));
+      logLastAlarm(evaluation!);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0]?.[0] ?? '';
+      expect(message).toContain('Attention');
+      expect(message).not.toContain('Delivery stopped');
+      expect(message).toContain(text);
+    }
+  });
+
+  it('does NOT warn for benign CareLink notification pings', () => {
+    // 062 "New notification received from CareLink" is a push confirmation.
+    // The vendor's own client suppresses its display name for this reason.
+    for (const code of [62, 70] as const) {
+      warnSpy.mockClear();
+      const evaluation = evaluateLastAlarm(alarmFixture({ code }));
+      logLastAlarm(evaluation!);
+      expect(warnSpy).not.toHaveBeenCalled();
+      // ...but it is still annotated, never dropped.
+      expect(evaluation!.text).toBe('New notification received from CareLink');
     }
   });
 
@@ -208,11 +269,11 @@ describe('logLastAlarm fires console.warn for priority-1 codes', () => {
       annotation: {
         code: 1024,
         datetime: '2026-07-21T00:00:00Z',
-        text: 'Critical Pump Error. Stop using pump.',
+        text: 'Critical Pump Error. Stop Pump Use. Use Other Treatment',
         severity: 'stop_using_pump' as const,
       },
       severity: 'stop_using_pump' as const,
-      text: 'Critical Pump Error. Stop using pump.',
+      text: 'Critical Pump Error. Stop Pump Use. Use Other Treatment',
     };
     logLastAlarm(evalResult);
 

@@ -49,10 +49,15 @@ describe('upload() response verification', () => {
     await expect(upload([{}], 'https://ns/api/v1/entries', 's')).rejects.toThrow(/HTTP 500/);
   });
 
-  it('falls back to the sent count when the body is not an array', async () => {
-    // Defensive: an unexpected shape should not crash the loop, but must not
-    // silently claim zero either.
+  it('throws when the body is not an array, rather than claiming a stored count', async () => {
+    // CORRECTED 2026-11-13. This used to assert `resolves.toBe(2)` — i.e. that
+    // the bridge reported success for a payload it never verified. Measured
+    // against a Nightscout behind a proxy/SSO answering `200 text/html` with a
+    // login page: old code reported stored=2, nothing was written. A non-array
+    // body cannot be checked, so it is a named failure, not a silent success.
     respond({ ok: true });
-    await expect(upload([{}, {}], 'https://ns/api/v1/devicestatus', 's')).resolves.toBe(2);
+    await expect(upload([{}, {}], 'https://ns/api/v1/devicestatus', 's')).rejects.toThrow(
+      /non-array body/,
+    );
   });
 });

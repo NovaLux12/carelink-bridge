@@ -28,7 +28,7 @@ import type { CareLinkAlarm } from './types/carelink.js';
 import type { NightscoutLastAlarmAnnotation } from './types/nightscout.js';
 import * as logger from './logger.js';
 
-export type LastAlarmSeverity = 'stop_using_pump' | 'delivery_stopped' | 'other';
+export type LastAlarmSeverity = 'stop_using_pump' | 'delivery_stopped' | 'attention' | 'other';
 
 export interface LastAlarmEvaluation {
   annotation: NightscoutLastAlarmAnnotation;
@@ -123,19 +123,63 @@ const STOP_USING_PUMP_CODES: ReadonlySet<number> = new Set([
 // The sets below now cover all 73 vendor codes. Group names are the vendor's
 // own name keys, kept verbatim so a reader can go straight to the table.
 const DELIVERY_STOPPED_CODES: ReadonlySet<number> = new Set([
-  // 002 — the vendor's largest group: 39 codes.
+  // 002 — "Pump Error. Delivery Stopped": the vendor's largest group, 39 codes.
   2, 3, 4, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 26, 27, 28, 30, 31, 33, 34,
   44, 45, 46, 49, 53, 54, 60, 63, 64, 65, 67, 68, 74, 75, 76, 79, 80, 81, 82,
-  // 011 — two codes. (Missed on the first pass; the coverage test caught it.)
-  11, 73,
-  // 037 — six codes.
+  // 037 — "Pump Motor Error. Delivery Stopped": six codes.
   37, 38, 39, 41, 42, 43,
-  // 062 — four codes.
-  62, 70, 71, 72,
-  // 007 — two codes.
-  7, 8,
-  // 006, 012, 025, 029, 051, 052, 057, 058, 061, 066, 069, 077, 084 — one each.
-  6, 12, 25, 29, 51, 52, 57, 58, 61, 66, 69, 77, 84,
+  // 007, 012, 029, 061, 077 and 130 individually name a stopped delivery.
+  7, 8, 12, 29, 61, 77,
+  // 809/810 — "Suspend On Low / Suspend Before Low. Delivery Stopped."
+  //
+  // These were tiered `other` (verbose-only, silent by default) because they sat
+  // outside the 73-code paradigm table the earlier model was built from. They
+  // are the NGP-era suspend alarms, they say "Delivery Stopped" in the vendor's
+  // own strings, and they are exactly what a SmartGuard pump does when it takes
+  // basal away. Measured before this change: 809 and 810 both returned
+  // severity 'other' with text "Unknown alarm code".
+  809, 810,
+]);
+
+/**
+ * Codes that need operator ATTENTION but are not stopped deliveries.
+ *
+ * These were previously tiered `delivery_stopped` and fired a priority-1
+ * `[LastAlarm] Delivery stopped` line on every occurrence. The vendor's own
+ * strings say they are not stopped deliveries — but they are not noise either:
+ * a pump that has run out of battery stops delivering shortly, and an empty
+ * reservoir already has.
+ *
+ * So they get their own tier rather than being promoted to a false stop or
+ * demoted into silence. `attention` logs at WARN, with the vendor's text —
+ * "Pump Battery Out Limit", "Reservoir Empty. Change Reservoir Now" — so the
+ * operator sees the actual problem instead of a wrong one.
+ */
+const ATTENTION_CODES: ReadonlySet<number> = new Set([
+  6,  // Pump Battery Out Limit
+  11, 73,  // Replace Pump Battery Now
+  25,  // Pump Power Error. Record Settings
+  52,  // Delivery Limit Exceeded. Check BG
+  57,  // Pump Battery Not Compatible
+  58,  // Insert A New AA Battery
+  66,  // No Reservoir Detected During Infusion Set Change
+  69,  // Loading Incomplete During Infusion Set Change
+  84,  // Pump Battery Removed. Replace Battery
+]);
+
+/**
+ * Codes that are genuinely benign chatter.
+ *
+ * `062`/`070`/`071`/`072` are the vendor's "New notification received from
+ * CareLink" — a push-delivery confirmation, not a pump event. The vendor's own
+ * client suppresses the display name for `062` for exactly this reason.
+ *
+ * `051` ("Bolus Stopped") is a cancelled BOLUS, not stopped basal delivery. It
+ * is annotated with the vendor's text so the record is accurate, but it is not
+ * a pump-level alarm and must not be logged as one.
+ */
+const BENIGN_CODES: ReadonlySet<number> = new Set([
+  51, 62, 70, 71, 72,
 ]);
 
 // Codes present in the third-party paradigm-era dictionary but ABSENT from the
@@ -149,72 +193,138 @@ const DELIVERY_STOPPED_CODES: ReadonlySet<number> = new Set([
 const LEGACY_CRITICAL_CODES: ReadonlySet<number> = new Set([131]);
 const LEGACY_DELIVERY_STOPPED_CODES: ReadonlySet<number> = new Set([1, 5, 130]);
 
-// Human-readable text for the codes we ship. Not exhaustive — for any code
-// not present in this map, evaluateLastAlarm synthesises "Unknown alarm code
-// <n>" so a real alarm is never silently dropped.
+/**
+ * Human-readable text for alarm codes, taken from the VENDOR'S OWN strings.
+ *
+ * Source: https://carelink.minimed.eu/crm/ocl/15.5/i18n/ui/app/en.json
+ *   (200, application/json, 137123 bytes,
+ *    sha256 a6b8180b87c022d65ae48700d240f5a2a80db3ad9db6b3c8fff3a5c707cd7f9f,
+ *    byte-identical on carelink.minimed.com; unauthenticated).
+ *
+ * The previous table was built from a third-party 2015 display dictionary and
+ * disagreed with the vendor on EVERY code it shipped. Most differences were
+ * cosmetic, but the wording is what an operator reads at 03:00, so it is worth
+ * being the vendor's. Where the vendor has no string for a code, `textFor()`
+ * still synthesises "Unknown alarm code <n>" so no alarm is ever silently
+ * dropped.
+ */
 const ALARM_TEXT: Readonly<Record<number, string>> = Object.freeze({
-  4: 'Insulin delivery stopped',
-  5: 'Insulin delivery stopped',
-  6: 'Insulin delivery stopped',
-  16: 'Insulin delivery stopped',
-  43: 'Insulin delivery stopped',
-  61: 'Insulin delivery stopped',
-  // NGP stop_using_pump (mddub a95dc120d9d1414a433d): all listed as
-  // "Critical Pump Error. Stop using pump" in the cited display dict.
-  24: 'Critical Pump Error. Stop using pump',
-  35: 'Critical Pump Error. Stop using pump',
-  40: 'Critical Pump Error. Stop using pump',
-  47: 'Critical Pump Error. Stop using pump',
-  48: 'Critical Pump Error. Stop using pump',
-  50: 'Critical Pump Error. Stop using pump',
-  55: 'Critical Pump Error. Stop using pump',
-  131: 'Critical Pump Error. Stop using pump',
-  // NGP delivery_stopped (same source): the cited dict renders these as
-  // "Pump error. Insulin delivery stopped" or "Insulin delivery stopped".
-  // Grouped to a single canonical text per the existing paradigm pattern.
-  1: 'Insulin delivery stopped',
-  22: 'Pump error. Insulin delivery stopped',
-  25: 'Pump error. Insulin delivery stopped',
-  33: 'Insulin delivery stopped',
-  42: 'Insulin delivery stopped',
-  63: 'Insulin delivery stopped',
-  67: 'Insulin delivery stopped',
-  76: 'Insulin delivery stopped',
-  77: 'Pump error. Insulin delivery stopped',
-  130: 'Insulin delivery stopped',
-  // Codes newly tiered by the vendor table. The vendor distinguishes 19 name
-  // keys among its 73 codes; the bridge collapses them to the two
-  // operator-facing texts above because Nightscout's annotation is a single
-  // string, and splitting 19 ways would fragment the record without helping a
-  // human reading it at 03:00. Every vendor code now resolves to real text, so
-  // "Unknown alarm code" only fires for codes outside the vendor table.
-  2: 'Insulin delivery stopped', 3: 'Insulin delivery stopped',
-  7: 'Insulin delivery stopped', 8: 'Insulin delivery stopped',
-  11: 'Insulin delivery stopped', 12: 'Insulin delivery stopped',
-  13: 'Insulin delivery stopped', 14: 'Insulin delivery stopped',
-  15: 'Insulin delivery stopped', 17: 'Insulin delivery stopped',
-  18: 'Insulin delivery stopped', 19: 'Insulin delivery stopped',
-  20: 'Insulin delivery stopped', 23: 'Insulin delivery stopped',
-  26: 'Insulin delivery stopped', 27: 'Insulin delivery stopped',
-  28: 'Insulin delivery stopped', 29: 'Insulin delivery stopped',
-  30: 'Insulin delivery stopped', 31: 'Insulin delivery stopped',
-  34: 'Insulin delivery stopped', 37: 'Insulin delivery stopped',
-  38: 'Insulin delivery stopped', 39: 'Insulin delivery stopped',
-  41: 'Insulin delivery stopped', 44: 'Insulin delivery stopped',
-  45: 'Insulin delivery stopped', 46: 'Insulin delivery stopped',
-  49: 'Insulin delivery stopped', 51: 'Insulin delivery stopped',
-  52: 'Insulin delivery stopped', 53: 'Insulin delivery stopped',
-  54: 'Insulin delivery stopped', 57: 'Insulin delivery stopped',
-  58: 'Insulin delivery stopped', 60: 'Insulin delivery stopped',
-  62: 'Insulin delivery stopped', 64: 'Insulin delivery stopped',
-  65: 'Insulin delivery stopped', 66: 'Insulin delivery stopped',
-  68: 'Insulin delivery stopped', 69: 'Insulin delivery stopped',
-  70: 'Insulin delivery stopped', 71: 'Insulin delivery stopped',
-  72: 'Insulin delivery stopped', 73: 'Insulin delivery stopped',
-  74: 'Insulin delivery stopped', 75: 'Insulin delivery stopped',
-  79: 'Insulin delivery stopped', 80: 'Insulin delivery stopped',
-  81: 'Insulin delivery stopped', 82: 'Insulin delivery stopped',
-  84: 'Insulin delivery stopped',
+  2: "Pump Error. Delivery Stopped",
+  3: "Pump Error. Delivery Stopped",
+  4: "Pump Error. Delivery Stopped",
+  13: "Pump Error. Delivery Stopped",
+  14: "Pump Error. Delivery Stopped",
+  15: "Pump Error. Delivery Stopped",
+  16: "Pump Error. Delivery Stopped",
+  17: "Pump Error. Delivery Stopped",
+  18: "Pump Error. Delivery Stopped",
+  19: "Pump Error. Delivery Stopped",
+  20: "Pump Error. Delivery Stopped",
+  22: "Pump Error. Delivery Stopped",
+  23: "Pump Error. Delivery Stopped",
+  26: "Pump Error. Delivery Stopped",
+  27: "Pump Error. Delivery Stopped",
+  28: "Pump Error. Delivery Stopped",
+  30: "Pump Error. Delivery Stopped",
+  31: "Pump Error. Delivery Stopped",
+  33: "Pump Error. Delivery Stopped",
+  34: "Pump Error. Delivery Stopped",
+  44: "Pump Error. Delivery Stopped",
+  45: "Pump Error. Delivery Stopped",
+  46: "Pump Error. Delivery Stopped",
+  49: "Pump Error. Delivery Stopped",
+  53: "Pump Error. Delivery Stopped",
+  54: "Pump Error. Delivery Stopped",
+  60: "Pump Error. Delivery Stopped",
+  63: "Pump Error. Delivery Stopped",
+  64: "Pump Error. Delivery Stopped",
+  65: "Pump Error. Delivery Stopped",
+  67: "Pump Error. Delivery Stopped",
+  68: "Pump Error. Delivery Stopped",
+  74: "Pump Error. Delivery Stopped",
+  75: "Pump Error. Delivery Stopped",
+  76: "Pump Error. Delivery Stopped",
+  79: "Pump Error. Delivery Stopped",
+  80: "Pump Error. Delivery Stopped",
+  81: "Pump Error. Delivery Stopped",
+  82: "Pump Error. Delivery Stopped",
+  24: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  35: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  40: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  47: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  48: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  50: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  55: "Critical Pump Error. Stop Pump Use. Use Other Treatment",
+  37: "Pump Motor Error. Delivery Stopped",
+  38: "Pump Motor Error. Delivery Stopped",
+  39: "Pump Motor Error. Delivery Stopped",
+  41: "Pump Motor Error. Delivery Stopped",
+  42: "Pump Motor Error. Delivery Stopped",
+  43: "Pump Motor Error. Delivery Stopped",
+  62: "New notification received from CareLink",
+  70: "New notification received from CareLink",
+  71: "New notification received from CareLink",
+  72: "New notification received from CareLink",
+  7: "Delivery Stopped. Check BG",
+  8: "Delivery Stopped. Check BG",
+  11: "Replace Pump Battery Now",
+  73: "Replace Pump Battery Now",
+  117: "Active Insulin Cleared",
+  817: "Alert Before High. Check BG",
+  805: "Alert Before Low. Check BG",
+  819: "Auto Mode Exit. Basal Delivery Started. BG Required",
+  12: "Auto Suspend Limit Reached. Delivery Stopped",
+  103: "BG Check Reminder",
+  829: "BG Required",
+  807: "Basal Delivery Resumed. Check BG",
+  814: "Basal Resumed. SG Still Under Low Limit. Check BG",
+  100: "Bolus Entry Timed Out Before Delivery",
+  51: "Bolus Stopped",
+  775: "Calibrate Now",
+  776: "Calibration Error",
+  869: "Calibration Reminder",
+  832: "Calibration Required",
+  812: "Call Emergency Assistance",
+  777: "Change Sensor",
+  833: "Correction Bolus Recommended",
+  52: "Delivery Limit Exceeded. Check BG",
+  140: "Delivery Suspended. Connect Infusion Set",
+  801: "Do Not Calibrate. Wait Up To 3 Hours",
+  816: "High Sensor Glucose",
+  823: "High Sensor Glucose For Over 1 Hour",
+  58: "Insert A New AA Battery",
+  69: "Loading Incomplete During Infusion Set Change",
+  780: "Lost Sensor Signal",
+  795: "Lost Sensor Signal. Check Transmitter",
+  815: "Low Limit Changed. Basal Manually Resumed. Check BG",
+  802: "Low Sensor Glucose",
+  803: "Low Sensor Glucose. Check BG",
+  822: "Maximum Delivery Timeout. BG Required",
+  821: "Minimum Delivery Timeout. BG Required",
+  107: "Missed Meal Bolus Reminder",
+  66: "No Reservoir Detected During Infusion Set Change",
+  796: "No Sensor Signal",
+  57: "Pump Battery Not Compatible",
+  6: "Pump Battery Out Limit",
+  84: "Pump Battery Removed. Replace Battery",
+  61: "Pump Button Error. Delivery Stopped",
+  25: "Pump Power Error. Record Settings",
+  29: "Pump Restarted. Delivery Stopped",
+  77: "Pump Settings Error. Delivery Stopped",
+  779: "Recharge Transmitter Now",
+  870: "Recharge Transmitter Soon",
+  104: "Replace Pump Battery Soon",
+  113: "Reservoir Empty. Change Reservoir Now",
+  105: "Reservoir Low. Change Reservoir Soon",
+  130: "Rewind Required. Delivery Stopped",
+  784: "SG Rising Rapidly",
+  797: "Sensor Connected",
+  794: "Sensor Expired. Change Sensor",
+  109: "Set Change Reminder",
+  110: "Silenced Sensor Alert. Check Alarm History",
+  810: "Suspend Before Low. Delivery Stopped. Check BG",
+  809: "Suspend On Low. Delivery Stopped. Check BG",
+  827: "Urgent Low Sensor Glucose. Check BG",
 });
 
 function textFor(code: number): string {
@@ -227,6 +337,11 @@ function severityFor(code: number): LastAlarmSeverity {
   // critical. A false critical is recoverable; a missed one is not.
   if (LEGACY_CRITICAL_CODES.has(code)) return 'stop_using_pump';
   if (STOP_USING_PUMP_CODES.has(code)) return 'stop_using_pump';
+  // Benign BEFORE the delivery-stopped set: these codes were tiered as stopped
+  // deliveries on the assumption that every non-critical vendor group was one.
+  // The vendor's own strings say otherwise — see BENIGN_CODES.
+  if (BENIGN_CODES.has(code)) return 'other';
+  if (ATTENTION_CODES.has(code)) return 'attention';
   if (DELIVERY_STOPPED_CODES.has(code)) return 'delivery_stopped';
   if (LEGACY_DELIVERY_STOPPED_CODES.has(code)) return 'delivery_stopped';
   return 'other';
@@ -296,6 +411,17 @@ export function logLastAlarm(evalResult: LastAlarmEvaluation): void {
   if (severity === 'delivery_stopped') {
     console.warn(
       `${tag} Delivery stopped — code=${codeLabel} text="${text}" datetime="${annotation.datetime}"`,
+    );
+    return;
+  }
+
+  if (severity === 'attention') {
+    // WARN, but with the vendor's own text and NOT the words "Delivery
+    // stopped". An operator must be able to tell "change the battery" apart
+    // from "basal has stopped" at a glance, or the priority-1 line loses its
+    // meaning.
+    console.warn(
+      `${tag} Attention — code=${codeLabel} text="${text}" datetime="${annotation.datetime}"`,
     );
     return;
   }
