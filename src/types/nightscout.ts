@@ -26,10 +26,16 @@ export interface NightscoutLastAlarmAnnotation {
   text: string;
   // Severity drives log level and downstream handling. 'stop_using_pump'
   // is load-bearing safety information regardless of any other annotation.
-  severity: 'stop_using_pump' | 'delivery_stopped' | 'other';
+  severity: 'stop_using_pump' | 'delivery_stopped' | 'attention' | 'other';
 }
 
 export interface NightscoutDeviceStatus {
+  /**
+   * Deterministic 24-hex id, so a re-sent devicestatus UPDATES instead of
+   * appending. Nightscout's devicestatus `create()` only skips a record whose
+   * `_id` is a 24-hex string; with none it runs `insertMany` every POST.
+   */
+  _id?: string;
   created_at: string;
   device: string;
   uploader: {
@@ -74,10 +80,50 @@ export interface NightscoutDeviceStatus {
     };
     clock: string;
     /**
+     * Delivery status, as Nightscout's pump plugin actually reads it.
+     *
+     * `lib/plugins/pump.js` `updateStatus()` (v15.0.9, verified by fetching the
+     * file) does:
+     *
+     *   if (pump.status) {
+     *     var status = pump.status.status || 'normal';
+     *     if (pump.status.bolusing)      status = 'bolusing';
+     *     else if (pump.status.suspended) status = 'suspended';
+     *     ...
+     *     if (suspended && prefs.warnOnSuspend) {
+     *       result.status.level = levels.WARN;
+     *       result.status.message = 'Pump Suspended';
+     *     }
+     *   }
+     *
+     * So `suspended` is not cosmetic: on a Nightscout with `warnOnSuspend` on,
+     * it raises a real WARNING on the pump pill. This is the only suspend field
+     * Nightscout reads — `autoMode.suspendFired` returns zero hits in the whole
+     * repo — which means before this existed, the bridge's most important
+     * "not delivering" fact had nowhere to land.
+     *
+     * `status` is the base word (`'normal'` if omitted, which is Nightscout's
+     * own default). `suspended` is set ONLY from an explicit `true` in the
+     * payload and omitted otherwise — absent stays absent, because asserting a
+     * running pump is a claim a missing field cannot support.
+     */
+    status?: {
+      status?: string;
+      suspended?: boolean;
+      bolusing?: boolean;
+    };
+    /**
      * SmartGuard auto-mode state, passed through from
      * `therapyAlgorithmState`. `suspendFired` is `null`, not `false`, when
      * `plgmLgsState` is a token outside the recorded vocabulary — see
      * describeAutoMode() in src/transform/index.ts.
+     *
+     * SCOPE — verified 2026-11-13 against nightscout/cgm-remote-monitor
+     * v15.0.9: `autoMode`, `plgm`, `shieldState` and `suspendFired` all return
+     * ZERO hits in that repo. This is the same dead-letter category as
+     * `last_alarm` above. Kept deliberately as the raw-evidence record (it is
+     * the faithful transcript of what the pump said), but it is NOT the safety
+     * path — `status.suspended` above is.
      */
     autoMode?: {
       shieldState?: string;
@@ -115,4 +161,16 @@ export interface TransformResult {
    * `markers[]`, which is normal for a CGM-only account.
    */
   treatments: Record<string, unknown>[];
+  /**
+   * Set when the payload was refused because its own device clock says the data
+   * is older than the staleness threshold.
+   *
+   * This exists so the fetch loop can tell "nothing to say" from "everything
+   * rejected as stale". Without it the loop sees an empty but successful
+   * transform, counts a success, and RESETS the stale watchdog that exists to
+   * catch exactly this case — a pump that stopped syncing looks healthy.
+   */
+  stale?: boolean;
+  /** How old the refused payload was, in minutes. Present only when stale. */
+  staleMinutes?: number;
 }

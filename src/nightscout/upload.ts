@@ -34,6 +34,10 @@ export async function upload(
 
   const response = await axios.post(endpoint, entries, {
     headers: { 'api-secret': hashedSecret },
+    // Without this axios defaults to NO timeout (measured: axios.defaults.timeout
+    // === 0), so a Nightscout that accepts the connection and then stalls blocks
+    // the fetch loop indefinitely — and SIGTERM then hits the 10 s force-exit.
+    timeout: 30_000,
   });
 
   if (response.status !== 200) {
@@ -55,8 +59,14 @@ export async function upload(
     return stored.length;
   }
 
-  logger.log(
-    'Upload response was not an array (' + typeof stored + ') — stored count unknown',
+  // A non-array body is an unexpected shape — refuse to claim a count we cannot
+  // read. Returning `entries.length` here reported SUCCESS for a payload that
+  // was never stored: measured against a Nightscout behind a proxy/SSO that
+  // answers `200 text/html` with a login page, the old code reported
+  // `stored = 2` while nothing was written. That is precisely the class of
+  // silent failure this function's header exists to prevent.
+  throw new Error(
+    'Nightscout returned a non-array body (' + typeof stored + ') — cannot ' +
+      'verify what was stored; treating as a failed upload',
   );
-  return entries.length;
 }

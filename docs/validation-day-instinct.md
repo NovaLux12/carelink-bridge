@@ -20,18 +20,60 @@ is to answer three questions and write the answers down:
 2. Which endpoint actually returns data for this device?
 3. Does the payload shape match what `src/transform/` expects?
 
-## Step 0 — before the pump arrives
+## Step 0a — turn the diagnostic lines on (they are OFF by default)
+
+**Do this first, or every step below produces an empty journal.**
+
+The three lines this document is built around — the device-identity line, the
+payload census, and `GET data` — are all emitted through `logger.log()` /
+`logger.info()`, and **both of those are verbose-only**. They are gated by
+`CARELINK_QUIET`, which defaults to **`true`** (`verbose: !readEnvBool('CARELINK_QUIET', true)`
+in `src/config.ts`; the gates are in `src/logger.ts`). So on a stock install
+none of them is printed, and a reader following this procedure exactly sees an
+empty journal with no error to explain it. This document did not say so until
+2026-11-14 — the omission made the whole procedure inoperative.
+
+Set it before you start:
+
+```bash
+# Foreground (npm start):
+CARELINK_QUIET=false npm start
+
+# systemd install — add the line to ~/carelink-bridge/.env, then:
+systemctl --user restart carelink-bridge
+```
+
+Only the literal `false` enables verbose output: `0`, `no` and `yes` all mean
+quiet, and an empty value counts as unset.
+
+Two things to know about what you will now see:
+
+- **`warn` and `error` lines are printed either way** — `CARELINK_QUIET` does
+  not silence them. So a journal with warnings but no `info` lines is the
+  expected look at the default setting, not proof the fetch never ran.
+- **Verbose mode logs the full upload payload** (every glucose value) and the
+  identity line unredacted. Turn it back off (`CARELINK_QUIET=true`, or remove
+  the line) when validation day is over.
+
+The device-identity and census lines are also deduped on payload *shape*, so
+each distinct shape prints once, not once per 5-minute fetch.
+
+## Step 0b — before the pump arrives
 
 ```bash
 npm ci
 npm run typecheck
-npm test          # expect 594 passing across 40 files
+npm test          # expect 614 passing across 43 files
 npm run doctor
 ```
 
-`doctor` is credential-free for the CareLink reachability check and proves the
-discovery endpoint is up in your region. Nightscout checks need `NS` and
-`API_SECRET` set.
+`doctor` is credential-free for the CareLink reachability check. Note what that
+check is worth: it prints "Discovery endpoint reachable (EU region)" whenever
+the host answers HTTP 200, and both hosts answer 200 for anyone — so it proves
+the endpoint is up, **not** that your region is right (the `isUS` split only
+selects a hostname, ADR 0002). Nightscout checks need `NS` and `API_SECRET` set.
+`doctor` makes no login attempt and no data call, so it cannot tell you that
+your account will fail MFA or that the data path answers 204/206.
 
 ## Step 1 — log in and let strategy 2 run
 
@@ -111,6 +153,8 @@ covering Instinct) and the spellings the matcher accepts (`BLE…`, `SIMPLERA…
 
 ## Step 3 — confirm which endpoint answered
 
+With `CARELINK_QUIET=false` from Step 0a (without it this grep matches nothing):
+
 ```bash
 journalctl --user -u carelink-bridge -f | grep -Ei 'GET data|BLE endpoint|identity|connect/data'
 ```
@@ -121,11 +165,19 @@ Which of these appears tells you the path:
 - `GET data <url>` with `monitor/data` → the monitor response was used directly
 - `GET data <url>` with `connect/data` → the legacy fallback answered
 
-Then check that glucose actually arrived:
+Then check that glucose actually arrived. Nightscout wants the **SHA-1 hex** of
+your `API_SECRET` in the `api-secret` header, so derive both values from your
+`.env` rather than typing them — run this from the directory holding `.env`:
 
 ```bash
+NS=$(grep -E '^NS=' .env | cut -d= -f2-)
+HASHED=$(printf %s "$(grep -E '^API_SECRET=' .env | cut -d= -f2-)" | sha1sum | cut -d' ' -f1)
 curl -s "$NS/api/v1/entries.json?count=5" -H "api-secret: $HASHED" | jq '.[].sgv'
 ```
+
+(`sha1sum` is coreutils, present on any Linux host; on macOS it is
+`shasum -a 1`. The hash must be of the secret with no trailing newline —
+`printf %s`, not `echo`.)
 
 **Zero entries with a success log is the failure mode this whole document
 exists to catch.** A 200 with an empty or unusable body is not success.

@@ -36,8 +36,15 @@ command -v node >/dev/null || { echo "node not found"; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd not found"; exit 1; }
 
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "Node $NODE_MAJOR detected; bridge requires >= 20. Please upgrade."
+NODE_MINOR=$(node -p 'process.versions.node.split(".")[1]')
+# Floor is 22.12, not 20. puppeteer-core@25 is a RUNTIME dependency (imported
+# eagerly by src/login.ts, which src/main.ts imports) and declares
+# engines.node >=22.12.0; @puppeteer/browsers requires the same. Checking only
+# the major version would green-light 22.0–22.11, which that dependency refuses.
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
+  echo "Node $(node -v) detected; the bridge requires Node >= 22.12."
+  echo "  - Distro packages (apt install nodejs) are too old on Debian/Ubuntu stable and Raspberry Pi OS."
+  echo "  - Use NodeSource, or the official tarball: https://nodejs.org/en/download"
   exit 1
 fi
 

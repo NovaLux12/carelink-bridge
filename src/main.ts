@@ -12,6 +12,7 @@ import { CareLinkClient } from './carelink/client.js';
 import { transform } from './transform/index.js';
 import { makeRecencyFilter } from './filter.js';
 import { upload } from './nightscout/upload.js';
+import { isUsablePayload } from './payload-shape.js';
 import * as logger from './logger.js';
 import * as metrics from './metrics.js';
 import type { UploadEndpoint } from './metrics.js';
@@ -133,6 +134,10 @@ if (config.metricsPort > 0) {
         lastSuccessTimestamp,
         consecutiveFailures: client.getConsecutiveFailures(),
         circuitOpen,
+        // The caller's real threshold, so a CARELINK_STALE_THRESHOLD_MINUTES
+        // override is honoured here too. Omitting it would silently restore the
+        // pre-#134 behaviour where stale data read as healthy.
+        staleThresholdMs: config.staleThresholdMs,
       };
     },
   });
@@ -203,22 +208,44 @@ async function uploadIfNew(items: unknown[], endpoint: string): Promise<void> {
         ? 'treatments'
         : 'devicestatus';
     metrics.incUpload(kind, stored);
-    // Report what was STORED, not what was sent. Nightscout dedups entries on
-    // (sysTime, type) by upsert, so a re-post silently updates an existing row
-    // and the stored count can legitimately be lower than the sent count. Any
-    // gap is worth seeing rather than assuming.
+    // What the count means, precisely.
+    //
+    // CORRECTED 2026-11-13: this used to say "Report what was STORED, not what
+    // was sent" and treat a gap as evidence of dedup. That was wrong.
+    // Nightscout's POST response is the request ECHOED back, not the stored set
+    // — `lib/server/treatments.js:163` returns `objOrArray`,
+    // `devicestatus.js:159,170` returns `statuses` including the re-sent copies
+    // it did not insert, and `entries` returns `docs`. So `stored` equals
+    // `items.length` in the normal case and the gap branch below is
+    // effectively unreachable.
+    //
+    // The load-bearing check lives in `upload()`: it throws when Nightscout
+    // answers 200 but stores none of a non-empty payload, which is the
+    // silent-discard case that matters. This log is accounting, not proof.
     if (stored !== items.length) {
       logger.info(
-        'Upload stored ' + stored + ' of ' + items.length + ' item(s) — the rest ' +
-          'were duplicates or discarded',
-        { endpoint, sent: items.length, stored },
+        'Nightscout accepted ' + stored + ' of ' + items.length + ' item(s) in the ' +
+          'response — the remainder were dropped server-side',
+        { endpoint, sent: items.length, accepted: stored },
       );
     } else {
-      logger.info('Upload succeeded', { endpoint, count: stored });
+      logger.info('Upload accepted', { endpoint, count: stored });
     }
   } catch (err) {
-    // Continue even if Nightscout can't be reached
-    logger.error('Upload failed', { endpoint, error: (err as Error).message });
+    // Continue even if Nightscout can't be reached, but COUNT it. Before this
+    // the failure existed only as a log line, so a Nightscout that had started
+    // rejecting every write was invisible on any dashboard — the upload counter
+    // only ever incremented on success.
+    const reason = metrics.classifyUploadFailure(err);
+    metrics.incUploadFailure(
+      endpoint.includes('entries')
+        ? 'entries'
+        : endpoint.includes('treatments')
+          ? 'treatments'
+          : 'devicestatus',
+      reason,
+    );
+    logger.error('Upload failed', { endpoint, reason, error: (err as Error).message });
   }
 }
 
@@ -230,15 +257,31 @@ async function requestLoop(): Promise<void> {
     try {
       const data = await client.fetch();
 
-      if (!data?.lastMedicalDeviceDataUpdateServerTime) {
+      if (!isUsablePayload(data)) {
         metrics.incFetch('failure');
         logger.warn('Empty or invalid data from CareLink', { component: 'bridge', keys: Object.keys(data || {}).length });
       } else {
+        const transformed = transform(data, config.sgvLimit);
+
+        if (transformed.stale) {
+          // CareLink answered 200 with data that is older than the threshold.
+          // Count it honestly and do NOT advance the success clock: resetting
+          // lastSuccessTimestamp / staleNotified here is what made the stale
+          // watchdog unable to fire for the case it was built for.
+          metrics.incFetch('failure');
+          metrics.observeFetchDuration(Date.now() - t0);
+          metrics.setCircuitOpen(client.isCircuitOpen());
+          metrics.setStale(true);
+          checkStale();
+          if (shuttingDown) break;
+          await sleep(config.interval, abortSignal);
+          continue;
+        }
+
         metrics.incFetch('success');
         metrics.setLastSuccess(Date.now());
         metrics.observeFetchDuration(Date.now() - t0);
 
-        const transformed = transform(data, config.sgvLimit);
         const newSgvs = filterSgvs(transformed.entries);
         const newDeviceStatuses = filterDeviceStatus(transformed.devicestatus);
         // Treatments carry a deterministic _id (see transform/treatments.ts), so
@@ -250,6 +293,16 @@ async function requestLoop(): Promise<void> {
 
         lastSuccessTimestamp = Date.now();
         staleNotified = false;
+        metrics.setStale(false);
+        // Age of the DATA, not of the fetch. A successful fetch of an hour-old
+        // payload looks identical to a fresh one in every other counter, which
+        // is exactly the "stale but 200" case the legacy backend produces.
+        // transform() already refused the stale case above, so any reading here
+        // is one the bridge considers fresh — this exposes how fresh.
+        const newest = transformed.entries[transformed.entries.length - 1];
+        if (newest && Number.isFinite(newest.date)) {
+          metrics.setNewestReading(newest.date);
+        }
         persistState();
 
         logger.info('Fetch succeeded', {

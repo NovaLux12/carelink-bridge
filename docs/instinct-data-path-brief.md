@@ -4,6 +4,16 @@
 **Date of research:** 2026-11-08 · **Evidence classes:** OBSERVED (live response I fetched today) · SOURCE-OBSERVED (`file:line` at a named commit) · SOURCE-PUBLISHED (an author's assertion) · INFERRED · UNVERIFIED
 
 ---
+## A note on visibility before you run any of this
+
+The diagnostic line this brief leans on is emitted by `logger.log()`, which is
+**verbose-only**: `CARELINK_QUIET` defaults to **`true`** (`src/config.ts`), so on
+a stock install the device-identity line, the payload census and the `GET data`
+lines are **not printed at all**. Run with `CARELINK_QUIET=false` (or add it to
+`.env` for a systemd install and restart) before expecting to see anything.
+`warn`/`error` lines appear either way. This caveat was missing until
+2026-11-14, and its absence made `docs/validation-day-instinct.md` inoperative
+as written — see that document's Step 0a.
 
 ## Headline: the premise needs correcting before any code is written
 

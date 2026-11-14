@@ -100,7 +100,7 @@ private advisory.
 
 ## Quick start (one-liner)
 
-If you already have Node 20+ and a CareLink account, this is
+If you already have Node 22.12+ and a CareLink account, this is
 the whole thing:
 
 ```bash

@@ -1,8 +1,11 @@
-# 0007 — Node.js 20+ only (Node 18 dropped)
+# 0007 — Node.js floor (Node 18 dropped; floor later raised to 22.12)
 
 ## Status
 
 Accepted (since v0.1.1, 2026-07-19).
+**Amended 2026-11-13:** the floor moved from Node 20 to Node 22.12. See
+"Amendment" at the end — the original decision text is kept verbatim so the
+reasoning that produced it stays readable.
 
 ## Context
 
@@ -76,16 +79,50 @@ The runtime code (`src/`) does not need to change.
 
 ## Notes
 
-- **The test-runner line has moved twice since this ADR was accepted.**
+- ~~**The test-runner line has moved twice since this ADR was accepted.**
   `package.json` now pins `vitest ^5.1.0`, whose own `engines.node` is
   `^22.12.0 || ^24.0.0 || >=26.0.0` — i.e. the *dev* floor is now Node 22.12,
   while `engines.node` for the shipped package is still `>=20.0.0` and the CI
   matrix is still `[20, 22]`. Node 20 can install and run the bridge but
-  cannot run the suite. Left as-is deliberately (the matrix is the contract
-  for the shipped code, not for contributors), and recorded here so nobody
-  derives the wrong conclusion from the two numbers disagreeing.
+  cannot run the suite.~~
+  **Corrected 2026-11-13 — that was wrong in fact and wrong about the cause.**
+  The claim "cannot run the suite" was never true: CI's `ci (20)` job ran
+  `Tests 594 passed (594)` on Node 20.20.2 on every push. The real blocker was
+  never the test runner — it was **`puppeteer-core@25.16.0`**, a *runtime*
+  dependency (`@puppeteer/browsers` agrees), which declares
+  `engines.node: ">=22.12.0"`. Node 20 produced three `npm warn EBADENGINE`
+  blocks and hard-fails under `--engine-strict`. So the paragraph above excused
+  a matrix mismatch that did not exist, and pointed at the wrong dependency.
 - Node release schedule: <https://nodejs.org/en/about/previous-releases>
 - The 9-month EOL-to-removal window in this ADR is a judgment
   call, not a rule. A future maintainer who wants to lengthen or
   shorten the window can do so by editing this ADR and explaining
   the new reasoning.
+
+## Amendment — 2026-11-13: floor raised to Node 22.12
+
+**What changed:** `engines.node` is now `">=22.12.0"` and the CI matrix is
+`[22, 24]`. Node 20 was dropped.
+
+**Why, in order of weight:**
+
+1. **Node 20 was EOL on 2026-04-30.** At the time of this amendment that is
+   seven months of missing security fixes, on a package that handles medical
+   data. The original ADR argued an EOL'd runtime is the wrong trade; that
+   argument now applies to Node 20 itself.
+2. **A runtime dependency refuses it.** `puppeteer-core@25.16.0` and
+   `@puppeteer/browsers@3.2.6` both declare `engines.node: ">=22.12.0"`.
+   `puppeteer-core` is imported eagerly by `src/login.ts`, which `src/main.ts`
+   imports — so this is not an optional code path. `deploy/install.sh` gated at
+   major-version 20 only and therefore green-lit an unsupported runtime.
+3. **The 22.12 minor matters, not just the major.** A major-only check accepts
+   22.0–22.11, which the dependency also refuses. The installer now compares
+   major and minor.
+
+**Verified, not assumed:** `npm ci` on Node 22 succeeds against the 0.3.1
+lockfile; the probe `if [ "$M" -lt 22 ] || { [ "$M" -eq 22 ] && [ "$N" -lt 12 ]; }`
+rejects 20.20.2 and 22.11.0 and accepts 22.12.0 and 24.22.2.
+
+**What this does not claim:** no live CareLink account has ever been exercised
+on any Node version. This amendment is about the dependency contract, nothing
+more.
