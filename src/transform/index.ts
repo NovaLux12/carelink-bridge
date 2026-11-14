@@ -357,7 +357,10 @@ export function deviceStatusId(deviceUpdateAtMs: number): string {
  * bridge's most important "not delivering" fact was invisible.
  *
  * Two independent sources mean suspended:
- *   1. `medicalDeviceSuspended: true` — the pump's own report.
+ *   1. `medicalDeviceSuspended: true` — the pump's own report. Confirmed as a
+ *      real wire field, not a guess: it appears 8 times in the vendor's own
+ *      client parser (carelink-api-research area DP field census, token
+ *      `medicalDeviceSuspended`, chunk byte 47,380).
  *   2. `autoMode.suspendFired === true` — SmartGuard took basal away
  *      (plgmLgsState SUSPEND_FIRED_PLGM / SUSPEND_FIRED_LGS).
  *
