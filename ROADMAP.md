@@ -41,7 +41,7 @@ followed the same day, and `package.json` reads `0.3.1`.
 | v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening. The operability items (graceful shutdown, stale-data alert) merged five days *after* this tag — see the note in the v0.2.0 section |
 | v0.3.0 | ✅ | **v0.3.0** (2026-11-12) | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 594-test suite |
 | v0.3.1 | ✅ | **v0.3.1** (2026-11-12) | Documentation accuracy across 16 files, and a validation guide that instructed readers to publish their pump serial. No behaviour change |
-| ~~v0.4.0~~ | — | **was folded into v0.3.0** | The observability work (#51, #59) merged before that release and shipped inside it; no separate tag was cut. **The number was reused on 2026-11-13** for validation-day readiness — see the v0.4.0 section |
+| v0.4.0 | ✅ | **v0.4.0** (2026-11-14) | **Reused number.** Originally reserved for observability, which shipped inside v0.3.0. Reassigned 2026-11-13 to validation-day readiness: v13 payload gate, treatment idempotence, vendor-derived alarm tiers, Loop/Nightscout conformance, failable `/healthz`, Node 22.12, tag-triggered release. 657-test suite |
 | v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
 | v0.6.0+ | ❌ | — | Proposed, low priority |
 
@@ -272,11 +272,49 @@ wrong, not merely inconvenient.
 
 **Tracking:** [GitHub issue #9](https://github.com/NovaLux12/carelink-bridge/issues/9) (closed 2026-09-08, `COMPLETED`)
 
-## v0.4.0 — observability (shipped inside v0.3.0, no separate tag)
+## v0.4.0 — validation-day readiness (shipped 2026-11-14)
+
+**The number was reused.** It was previously reserved for observability, which
+shipped inside v0.3.0 instead; the heading below is kept so that original plan
+stays readable. On 2026-11-13 the free slot was reassigned to the one thing with
+a hard deadline: making the bridge survive its first real CareLink payload.
+
+**Goal:** every wrong guess fails loudly instead of silently.
+
+**Status:** shipped as `v0.4.0` on 2026-11-14. Tag, release object and
+`package.json` agree, and `.github/workflows/release.yml` now asserts that
+mechanically so it cannot drift again.
+
+- [x] Accept the v13 `display/message` payload at the fetch gate — it rejected
+      the one shape its own transform handled (#134)
+- [x] One meal stays one Nightscout row across polls, however the anchor drifts
+- [x] Alarm severity derived from the vendor's own display strings, with an
+      `attention` tier so a battery reminder stops claiming "Delivery stopped"
+- [x] `upload()` refuses to report a stored count it cannot read; POST has a timeout
+- [x] A stale payload no longer counts as a successful fetch
+- [x] `kind` absence no longer drops every glucose reading; SGV order normalised
+- [x] Loop stops discarding every treatment (`timestamp`) and BG Check (`units`)
+- [x] `pump.status.suspended` — the one suspend field Nightscout renders
+- [x] Deterministic devicestatus `_id` so re-sends dedupe
+- [x] `/healthz` can return 503; data-age, upload-failure and stale metrics
+- [x] Node floor 22.12 (puppeteer-core is a runtime dependency that requires it)
+- [x] Tag-triggered release workflow with a version-vs-tag assert
+- [x] Validation guide made operable at default settings
+
+**What it does not do:** it is not validated against a live account. Issue #12
+still gates that, and nothing here substitutes for it.
+
+**Tracking:** [#137](https://github.com/NovaLux12/carelink-bridge/issues/137)
+(umbrella), with #134/#135/#136 closed against it.
+
+## v0.4.0 (original plan) — observability (shipped inside v0.3.0, no separate tag)
 
 **Status:** everything below shipped in the **v0.3.0** release on 2026-11-12.
-No `v0.4.0` tag exists and none will be cut — the heading is kept so the
-original plan stays readable rather than being deleted.
+~~No `v0.4.0` tag exists and none will be cut~~ — **superseded 2026-11-14: the
+number was reused** for validation-day readiness (see above). This heading is
+kept so the original observability plan stays readable rather than being
+deleted; the phrase "none will be cut" was true when written and is preserved
+here as the record of that decision.
 
 **Goal:** make the bridge debuggable from logs and metrics,
 not just from `console.log` scraping.

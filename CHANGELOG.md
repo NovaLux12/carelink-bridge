@@ -14,6 +14,216 @@ record, not reconstructed.
 
 _Nothing yet._
 
+## [0.4.0] — 2026-11-14
+
+**This release is validation-day readiness.** It is not a feature release: it is
+the set of changes that make the bridge survive its first real CareLink payload,
+and make every remaining wrong guess fail loudly instead of silently.
+
+> **Nothing in this release was validated against a live CareLink account.**
+> The bridge has still never talked to one. What shipped here is unit-provable
+> only. The 780G is expected within the month, and after that first fetch every
+> item below stops being a pull request and becomes a production incident.
+
+The organising principle: every defect found was one of three shapes — a value
+that defaulted to something plausible, a success reported without verifying the
+effect, or a shape assumption that had never met the wire. 594 green tests had
+proved nothing about the payload, because `src/main.ts` — the file that decides
+whether a fetch succeeded — had **zero test coverage**.
+
+### Fix — the v13 payload was rejected by the only gate that mattered
+
+`src/main.ts` decided a fetch was valid with
+`if (!data?.lastMedicalDeviceDataUpdateServerTime)`. The v13 `display/message`
+route **never sends that field** — `src/transform/index.ts` said so in a comment,
+and `test/ble-payload-shape.test.ts` built its v13 fixture by deleting it, so the
+two halves of the bridge disagreed about the shape they handled.
+
+Measured: the gate returned `false` for a payload that `transform()` converted
+into 2 entries + 1 devicestatus + 1 treatment. On the exact device this fork's
+v0.3 line targets, the bridge fetched good data, logged `Empty or invalid data
+from CareLink`, incremented `failure`, uploaded nothing, and tripped the stale
+watchdog. Now delegates to `isUsablePayload()` (`src/payload-shape.ts`), pinned
+by `test/payload-gate.test.ts`.
+
+### Fix — one meal became one Nightscout row per poll
+
+`treatmentId()` hashes a marker's derived millisecond, and that millisecond
+inherited whatever sub-slot residue the anchor carried.
+`lastMedicalDeviceDataUpdateServerTime` is never slot-aligned (real fixtures
+carry residues of 170,381 ms and 275,436 ms), so one physical meal at index 280
+then 279, with 7 s of anchor jitter across two polls, hashed to two different
+`_id`s:
+
+```
+poll1  carelink-marker-7890e2…  created 11:25:00.381Z
+poll2  carelink-marker-5633cf…  created 11:25:02.881Z
+```
+
+Nightscout dedups treatments on `_id` alone, so each poll appended another row —
+and its IOB/COB sums then counted that insulin and those carbs twice, in the app
+people dose from. The anchor is now quantised to the 300 s slot in
+`mapMarkers()`. `test/treatment-idempotence.test.ts` fails on the previous code.
+
+### Fix — alarm severity now follows the vendor's own strings
+
+The tiering was inferred from *group* membership: any non-critical vendor group
+meant "delivery stopped". Measured against the vendor's own display strings, that
+was wrong in both directions.
+
+- **12 codes that are battery or notification messages fired a priority-1
+  `[LastAlarm] Delivery stopped`** — `006 Pump Battery Out Limit`,
+  `011`/`073 Replace Pump Battery Now`, `051 Bolus Stopped`,
+  `062 New notification received from CareLink` and others. Added an `attention`
+  tier: these still WARN, in the vendor's own words, without claiming basal has
+  stopped.
+- **`809`/`810` — "Suspend On Low. Delivery Stopped. Check BG" — were tiered
+  `other`, i.e. silent by default.** They are the NGP-era suspend alarms and are
+  exactly what a SmartGuard pump raises when it takes basal away.
+- All 116 codes now carry the vendor's text. `ALARM_TEXT` previously disagreed
+  with the vendor on every code it shipped.
+
+Source: `https://carelink.minimed.eu/crm/ocl/15.5/i18n/ui/app/en.json` — 200,
+`application/json`, 137,123 B, sha256 `a6b8180b87c022d6…`, byte-identical on
+`carelink.minimed.com`, 63 `connect.ble.<code>` keys. This was **never
+token-gated**; the research repo had recorded it as blocked on a clinician token
+and that is now corrected there. `test/alarm-severity-vs-vendor-text.test.ts`
+pins every code's text against the bundle.
+
+Corrects a figure from the working notes: **10** codes carry the phrase "Delivery
+Stopped", not 11. `024` is not one of them — it reads "Critical Pump Error. Stop
+Pump Use. Use Other Treatment", which is stricter and tiers `stop_using_pump`.
+
+### Fix — upload honesty, and a stale payload no longer counts as success
+
+- A **200 with a non-array body reported the SENT count as stored.** Against a
+  Nightscout behind a proxy/SSO answering `200 text/html` with a login page, the
+  old code claimed success for a payload that was never written. It now throws.
+- The POST had **no timeout** (axios defaults to none), so a stalled Nightscout
+  blocked the fetch loop indefinitely. Now 30 s.
+- A **stale payload was counted as a successful fetch**, which reset the very
+  watchdog that exists to catch it — a pump that stopped syncing looked healthy.
+  `transform()` now returns a stale verdict and the loop refuses to advance the
+  success clock.
+- The comment claiming the upload log reported what was *stored* was false:
+  Nightscout's response is the request echoed back (`treatments.js:163` returns
+  `objOrArray`; `devicestatus.js:159,170` returns `statuses` including copies it
+  did not insert), so that branch is unreachable. Corrected rather than left as a
+  comfortable lie in a medical-data path.
+
+### Fix — glucose readings that were silently dropped or mis-ordered
+
+- **`kind` was a guess.** `sgv.kind !== 'SG'` dropped the reading, but `kind` has
+  never been observed on `display/message`. Measured: no `kind` → 0 entries;
+  `kind: "sg"` → 0 entries. A total, silent glucose outage from a field-name
+  assumption. Absence is now accepted; only a *known* non-SG token (`CAL`,
+  `BG`, …) is rejected.
+- **SGV order was never normalised.** On a descending payload the trend was
+  attached to the *oldest* reading, and `.slice(-limit)` kept the oldest `limit`
+  readings and discarded the newest. Measured with limit 2: kept `[100, 90]`,
+  dropped `200`. Now sorted ascending, with the trend gate moved onto the newest
+  *slot* so a trailing `sg: 0` sentinel still suppresses it.
+
+### Fix — the Nightscout fields consumers actually read
+
+- **Loop was discarding every treatment this bridge uploaded.** LoopKit's
+  `NightscoutTreatment.init?` is failable and requires `entry["timestamp"]`,
+  which Nightscout never synthesises. The bridge emitted `created_at` only, so
+  every meal, bolus and carb correction returned nil — a Loop user saw a CGM with
+  no insulin history. AAPS masked it by falling back
+  `date ?: mills ?: timestamp ?: created_at`.
+- **Loop also discarded every `BG Check`** — `BGCheckNightscoutTreatment` requires
+  `units`, now emitted as `mg/dL`.
+- **`pump.status.suspended` is now published** — the ONE suspend field Nightscout
+  renders. `pump.js` `updateStatus()` reads it as a **boolean** and, with
+  `prefs.warnOnSuspend` on, raises a real Nightscout WARNING ("Pump Suspended").
+  The bridge previously wrote only `autoMode.suspendFired`, which returns zero
+  hits anywhere in that repo. Set from `medicalDeviceSuspended === true` or
+  `suspendFired === true`; absent otherwise, never asserted as "Normal".
+- **devicestatus now carries a deterministic 24-hex `_id`**, so re-sends dedupe.
+  Without one Nightscout ran `insertMany` on every POST, and the recency filter is
+  in-memory, so every restart re-inserted too — ~288 docs/day of growth.
+
+### Added — observability that can actually go red
+
+`/healthz` returned `200 {"status":"ok"}` unconditionally: circuit open,
+never-succeeded, twelve hours stale — all "ok". The Docker `HEALTHCHECK` and any
+uptime monitor could detect a dead *process* but never a bridge that had silently
+stopped receiving data. It now returns 503 for anything but healthy:
+
+```
+healthy         HTTP 200  status=ok        staleFor=null
+stale 40min     HTTP 503  status=stale     staleFor=2400
+circuit open    HTTP 503  status=degraded  staleFor=null
+never succeeded HTTP 503  status=degraded  staleFor=null
+```
+
+A separate `liveness` field keeps "container up, data dead" distinguishable from
+"container down". New metrics, all with closed label sets: `carelink_data_age_seconds`
+(age of the newest READING, not of the fetch — a successful fetch of an hour-old
+payload looked identical to a fresh one in every other counter),
+`carelink_upload_failures_total{endpoint,reason}` where `discarded` is its own
+reason for the 200-that-stored-nothing case, and the `carelink_stale` gauge.
+`incTokenRefresh` had **zero call sites** in `src/` while being documented in
+USER-GUIDE.md and rendered in the exposition — a panel that could never move. Now
+wired, and verified moving.
+
+### Changed — the Node contract
+
+`engines.node` was `>=20.0.0`. `puppeteer-core@25` is a **runtime** dependency
+(imported eagerly by `src/login.ts`, which `src/main.ts` imports) and requires
+Node ≥ 22.12, so advertising Node 20 was a false claim: it produced `EBADENGINE`
+warnings on every CI run and hard-fails under `--engine-strict`. Node 20 also went
+EOL 2026-04-30. Floor is now `>=22.12.0`, matrix `[22, 24]`, and
+`deploy/install.sh` compares major *and* minor (a major-only check accepted
+22.0–22.11, which the dependency also refuses).
+
+ADR 0007 claimed Node 20 "cannot run the suite". It can — CI ran 594 passing
+tests on 20.20.2 on every push. Amended with the correction stated and the
+original text kept.
+
+### Changed — release plumbing
+
+- **A tag push ran no workflow at all.** `ci.yml` triggers on branches only, so
+  tagging was the one moment nothing was checked — the release object was a
+  hand-typed string on a commit nothing re-verified. New
+  `.github/workflows/release.yml` asserts: tag is semver, `package.json` **and**
+  `package-lock.json` agree with it, the commit is an ancestor of `main`, a
+  non-trivial CHANGELOG section exists, then typecheck/test/build, then
+  `gh release create --notes-file`.
+- `"private": true` — the name `carelink-bridge` is unclaimed on npm, and
+  `npm pack` shipped 113 files with **zero from `dist/`** while `main` pointed
+  at `dist/index.js`.
+- CI: `permissions: contents: read`, a concurrency group (v0.3.1's branch ran a
+  full duplicate matrix three times in twelve minutes), timeouts, `npm run build`
+  (the artefact operators actually run was never built in CI), and a
+  package.json-vs-lockfile version assert — the one release step `npm ci` cannot
+  catch.
+
+### Fixed — documentation that would strand the reader
+
+- **`docs/validation-day-instinct.md` was inoperative as written.** Its whole
+  procedure depends on three log lines that are all verbose-only, gated by
+  `CARELINK_QUIET`, which defaults to `true` — and the document never mentioned
+  it. A reader following it exactly saw an empty journal. Also had two undefined
+  shell variables (`$NS`, `$HASHED`) in its final `curl`.
+- `USER-GUIDE` recommended `apt install nodejs`, which ships Node 18 on every
+  Debian/Ubuntu/Pi OS stable and is now refused by the installer; and recommended
+  nvm, which cannot work against a unit hardcoding `ExecStart=/usr/bin/node`
+  (fails `203/EXEC` with nothing naming the cause). `.env` now explicitly
+  `chmod 600`.
+- `deploy/README` said to run `npm run login` from `deploy/`, where there is no
+  `package.json`. It also advertised `npm run doctor` as a deploy gate, but a
+  missing `logindata.json` exits **0**.
+- Both `.env` templates were missing keys the other had.
+  `CARELINK_ASSUME_TIMEZONE` is the one that bites: absent it, an unzoned
+  reading is parsed as UTC and a UK user in BST gets every value shifted an hour,
+  with a warning that is invisible at default verbosity.
+- ROADMAP had no `v0.3.1` row and still claimed `package.json` read `0.3.0` —
+  the same drift the 0.3.1 doc sweep was meant to kill.
+
+657 tests / 45 files. `npm run links:check` PASSED.
+
 ## [0.3.1] — 2026-11-12
 
 ### Fix
