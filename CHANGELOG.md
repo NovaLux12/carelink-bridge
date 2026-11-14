@@ -14,6 +14,61 @@ record, not reconstructed.
 
 _Nothing yet._
 
+## [0.4.1] — 2026-11-14
+
+**A patch, because v0.4.0's own headline claim was undermined one commit later.**
+
+v0.4.0's stated purpose was that the silent failure modes were gone. Checking
+the two subagent handoff reports afterwards found three integration gaps that
+had landed *after* the tag — and one of them was a metric that lied in exactly
+the scenario it was added to catch. Shipping a tag whose purpose is contradicted
+by one commit on `main` is the release-hygiene failure this repo has already been
+bitten by twice (v0.1.1, and v0.3.0 marked shipped while untagged).
+
+### Fix — `carelink_stale` did not track the stale watchdog
+
+The gauge was set only on the stale-**payload** branch, where CareLink serves a
+payload that is itself hours old. The commoner condition — **every fetch
+failing**, so no payload arrives at all — fires the STALE warning and the webhook
+while the gauge still reads `0`.
+
+A gauge reporting healthy while the watchdog is shouting is worse than no gauge,
+and it is precisely the "flat green graph means nothing" failure the metric
+exists to fix.
+
+The predicate is now `decideStale()` in `src/stale-watchdog.ts`, called by
+`checkStale()`. It is a separate module because `src/main.ts` is a top-level
+script that starts a fetch loop on import and therefore cannot be unit-tested —
+the same shape as the v0.4.0 gate defect, where the file that decides health was
+the only one with no coverage.
+
+`decideStale()` returns **`null`, never `false`**, when there has never been a
+successful fetch: a null must not be read as "fine" (`/healthz` reports that case
+as `degraded`), and a backwards clock step clamps to `0` rather than a negative
+age that would never fire.
+
+### Fix — the Docker compose file could never refresh a token
+
+`deploy/nightscout-docker-compose.yml` bind-mounted `logindata.json` `:ro`.
+`writeLoginDataAtomic()` writes a temp file and `rename()`s it over the
+destination, and a rename onto a bind-mounted **file** is `EBUSY` regardless of
+the `:ro`/`:rw` flag — measured on both, plus `EBUSY` on `unlinkSync` against the
+`:ro` mount. So once the access token expired, every fetch failed with a bare
+errno and the bridge never re-logged in, because the file was still sitting
+there.
+
+`deploy/README.md` was corrected in v0.4.0; the compose file it ships was not.
+The mount is now commented out with the measurement attached, rather than
+shipped as a line that looks harmless.
+
+### Fix — `install.sh` contradicted itself
+
+Its header comment said `Node.js >= 20` while the runtime check two lines below
+correctly required `22.12`. The check was right; the comment was wrong, and it is
+the one a re-reader sees first.
+
+665 tests / 46 files. `npm run links:check` PASSED.
+
 ## [0.4.0] — 2026-11-14
 
 **This release is validation-day readiness.** It is not a feature release: it is
