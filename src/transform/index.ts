@@ -350,11 +350,11 @@ export function deviceStatusId(deviceUpdateAtMs: number): string {
 /**
  * The delivery-status block Nightscout actually renders.
  *
- * `lib/plugins/pump.js:284-293` (cgm-remote-monitor v15.0.9) reads
- * `pump.status.suspended` and `pump.status.bolusing` — and nothing else in that
- * repo reads any suspend field. The bridge used to publish only
- * `autoMode.suspendFired`, which returns zero hits there, so a real
- * "not delivering" fact was invisible on the pump pill.
+ * `lib/plugins/pump.js` `updateStatus()` (cgm-remote-monitor v15.0.9, read
+ * directly) reads `pump.status.suspended` / `pump.status.bolusing` as BOOLEANS
+ * and raises a WARNING ("Pump Suspended") when `prefs.warnOnSuspend` is on.
+ * Nothing in that repo reads `autoMode.suspendFired`, so before this the
+ * bridge's most important "not delivering" fact was invisible.
  *
  * Two independent sources mean suspended:
  *   1. `medicalDeviceSuspended: true` — the pump's own report.
@@ -362,17 +362,19 @@ export function deviceStatusId(deviceUpdateAtMs: number): string {
  *      (plgmLgsState SUSPEND_FIRED_PLGM / SUSPEND_FIRED_LGS).
  *
  * `suspendFired` is `boolean | null`, where null means "a token we do not
- * recognise" — that is NOT a suspend, and is deliberately not treated as one.
+ * recognise" — not a suspend, and deliberately not treated as one.
  *
  * Returns undefined when neither source says suspended, so `status` is absent
- * rather than asserting a running pump. Absent stays absent.
+ * rather than asserting a running pump. Also deliberately NOT emitting
+ * `bolusing`: the payload has no trustworthy "a bolus is running right now"
+ * field, and `activeInsulin` is a decayed total, not a delivery flag.
  */
 export function suspendStatus(
   data: { medicalDeviceSuspended?: boolean },
   autoMode: AutoModeSnapshot | undefined,
-): { status: { suspended: 'Suspended' } } | undefined {
-  if (data.medicalDeviceSuspended === true) return { status: { suspended: 'Suspended' } };
-  if (autoMode?.suspendFired === true) return { status: { suspended: 'Suspended' } };
+): { status: { suspended: true } } | undefined {
+  if (data.medicalDeviceSuspended === true) return { status: { suspended: true } };
+  if (autoMode?.suspendFired === true) return { status: { suspended: true } };
   return undefined;
 }
 

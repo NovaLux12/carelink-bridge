@@ -127,15 +127,16 @@ describe('pump.status — the field Nightscout actually renders', () => {
   });
 
   it('is Suspended when the pump reports medicalDeviceSuspended', () => {
+    // Boolean, not a string: pump.js does `else if (pump.status.suspended)`.
     expect(suspendStatus({ medicalDeviceSuspended: true }, undefined)).toEqual({
-      status: { suspended: 'Suspended' },
+      status: { suspended: true },
     });
   });
 
   it('is Suspended when SmartGuard reports suspendFired', () => {
     expect(
       suspendStatus({}, { suspendFired: true } as never),
-    ).toEqual({ status: { suspended: 'Suspended' } });
+    ).toEqual({ status: { suspended: true } });
   });
 
   it('does not treat an unrecognised plgm token as a suspend', () => {
@@ -155,7 +156,7 @@ describe('pump.status — the field Nightscout actually renders', () => {
       }),
       24,
     );
-    expect(out.devicestatus[0].pump?.status).toEqual({ suspended: 'Suspended' });
+    expect(out.devicestatus[0].pump?.status).toEqual({ suspended: true });
     // The raw evidence is still published alongside it.
     expect(out.devicestatus[0].pump?.autoMode?.suspendFired).toBe(true);
   });

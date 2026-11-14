@@ -82,21 +82,35 @@ export interface NightscoutDeviceStatus {
     /**
      * Delivery status, as Nightscout's pump plugin actually reads it.
      *
-     * `lib/plugins/pump.js:284-293` (v15.0.9) renders `pump.status.suspended`
-     * and `pump.status.bolusing`. That makes this the ONE suspend field
-     * Nightscout surfaces — and before it existed here, the bridge published
-     * `autoMode.suspendFired` instead, which has ZERO hits anywhere in the
-     * Nightscout repo. So a genuine "delivery stopped" fact landed somewhere
-     * nothing read, while the field that would have shown up on the pump pill
-     * was never written.
+     * `lib/plugins/pump.js` `updateStatus()` (v15.0.9, verified by fetching the
+     * file) does:
      *
-     * `suspended` is set ONLY from an explicit `true` in the payload, and is
-     * omitted (never `'Normal'`) otherwise: absent stays absent. Asserting a
-     * running pump is a claim we cannot make from a missing field.
+     *   if (pump.status) {
+     *     var status = pump.status.status || 'normal';
+     *     if (pump.status.bolusing)      status = 'bolusing';
+     *     else if (pump.status.suspended) status = 'suspended';
+     *     ...
+     *     if (suspended && prefs.warnOnSuspend) {
+     *       result.status.level = levels.WARN;
+     *       result.status.message = 'Pump Suspended';
+     *     }
+     *   }
+     *
+     * So `suspended` is not cosmetic: on a Nightscout with `warnOnSuspend` on,
+     * it raises a real WARNING on the pump pill. This is the only suspend field
+     * Nightscout reads — `autoMode.suspendFired` returns zero hits in the whole
+     * repo — which means before this existed, the bridge's most important
+     * "not delivering" fact had nowhere to land.
+     *
+     * `status` is the base word (`'normal'` if omitted, which is Nightscout's
+     * own default). `suspended` is set ONLY from an explicit `true` in the
+     * payload and omitted otherwise — absent stays absent, because asserting a
+     * running pump is a claim a missing field cannot support.
      */
     status?: {
-      suspended?: 'Suspended';
-      bolusing?: 'Bolusing';
+      status?: string;
+      suspended?: boolean;
+      bolusing?: boolean;
     };
     /**
      * SmartGuard auto-mode state, passed through from
