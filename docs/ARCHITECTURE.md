@@ -272,17 +272,52 @@ CAPTCHA / MFA challenges, the operator's IP reputation, and the
 Auth0 tenant's current risk model. The three strategies cover the
 real failure modes:
 
-- **Strategy 1 (automated):** Works for most accounts without
-  CAPTCHA. Fast, no browser window.
+- **Strategy 1 (automated):** ⚠ **BROKEN as of 2026-11-14 — see below.**
+  Intended to POST credentials straight to Auth0 with no browser. Fast, no
+  window.
 - **Strategy 2 (browser):** Works when Auth0 challenges the
   request. Uses Puppeteer to open a real browser, the operator
   completes the challenge, the bridge intercepts the OAuth
   redirect. Requires Chrome / Edge / Chromium on the host.
+  **This is the only strategy anyone has observed to succeed** (2026-11-14,
+  real account, macOS).
 - **Strategy 3 (terminal paste):** Works when neither of the
   above is possible. The bridge prints the Auth0 authorize URL,
   the operator opens it in any browser, logs in, copies the
   redirect URL containing the `code=...` parameter, pastes it
   back.
+
+### Strategy 1 is broken, and the reason is structural (measured 2026-11-14)
+
+The old text here said Strategy 1 "works for most accounts without CAPTCHA".
+That was never tested and is now known to be false. The chain, measured against
+a live account:
+
+```
+GET  https://carelink-login.minimed.eu/authorize?…  → 302 /u/login?state=…
+GET  /u/login?state=…                              → 200, 95,520 bytes
+     <title>Sign in to CareLink™ Personal</title>
+     hidden inputs: ['state', 'captcha']
+     has password input: true
+     has username input: true
+     <form> element:  NONE
+```
+
+**Auth0's Universal Login renders its form in JavaScript — the served HTML
+contains no `<form>` element and no `<form action>`.** `loginAutomated()` works
+by scraping `type="hidden"` inputs and POSTing to the form's `action`. With no
+form, there is nothing to scrape and nowhere to POST, so the step fails with
+*"Could not extract authorization code from redirect chain"* — which is what the
+user sees, and which reads like a redirect problem rather than a page-shape one.
+
+This is not account-specific and not a CAPTCHA gate. It cannot work against this
+page for anyone. Making it work would mean driving Auth0's JS flow directly
+(executing its client bundle, or reimplementing the Universal Login protocol) —
+a substantially larger job than the current HTTP scrape, and a moving target.
+
+**Practical consequence:** on a headless host, the login is Strategy 3 or
+nothing. On a desktop, Strategy 2. The roadmap's "expect Strategy 1 to fail on
+MFA" framing is wrong — it fails *before* MFA is ever reached.
 
 ### The discovery version pin
 
