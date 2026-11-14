@@ -89,12 +89,20 @@ export function writeLoginDataAtomic(filePath: string, data: LoginData): void {
   //    also defends against a symlinked tmpPath (in the unlikely event a
   //    pre-existing logindata.json.tmp is itself a symlink, the open fails
   //    rather than silently writing through it).
-  //    'w' constant in Node would truncate; we need the explicit bitmask to
-  //    carry O_EXCL. Node does not expose a numeric constants export for
-  //    these flags, so use the documented libc values.
-  const O_CREAT = 0o100;
-  const O_WRONLY = 0o1;
-  const O_EXCL = 0o200;
+  //
+  //    These come from fs.constants, NOT hardcoded octals.
+  //
+  //    CORRECTED 2026-11-14: this used to declare `const O_CREAT = 0o100` and
+  //    friends, with a comment asserting Node "does not expose a numeric
+  //    constants export for these flags". That was false — `fs.constants`
+  //    exists — and the hardcoded values were the Linux numbers, so they
+  //    happened to work only there. On macOS O_CREAT is 512, not 64, and
+  //    O_EXCL is 2048, not 128; passing the Linux bitmask meant `open` got no
+  //    valid create flag and returned ENOENT against a perfectly writable
+  //    directory. Found by running `npm run login` on a Mac: the whole OAuth
+  //    flow succeeded, real tokens came back, and the token could not be saved
+  //    — an ENOENT that looks like a permissions problem and is not.
+  const { O_CREAT, O_WRONLY, O_EXCL } = fs.constants;
   const fd = fs.openSync(tmpPath, O_CREAT | O_WRONLY | O_EXCL, SECRET_FILE_MODE);
 
   try {
