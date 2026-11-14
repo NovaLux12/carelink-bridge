@@ -26,8 +26,8 @@ Each phase below has the same shape:
 had to be drawn on 2026-11-12 because it had stopped being true: v0.3.0 was
 marked shipped with a date while no such tag existed anywhere, so
 `package.json` read `0.2.0` and `git tag` stopped at `v0.2.0`. **That drift is
-now closed** — `v0.3.0` was tagged and released on 2026-11-12 and
-`package.json` reads `0.3.0`.
+now closed** — `v0.3.0` was tagged and released on 2026-11-12, `v0.3.1`
+followed the same day, and `package.json` reads `0.3.1`.
 
 | Phase | Code on `main` | Tag / release | Notes |
 |-------|---------------|---------------|-------|
@@ -40,7 +40,8 @@ now closed** — `v0.3.0` was tagged and released on 2026-11-12 and
 | v0.1.6 | ✅ | **v0.1.6** (2026-07-19) | `npm run doctor` |
 | v0.2.0 | ✅ | **v0.2.0** (2026-07-22) | Safety + reliability hardening. The operability items (graceful shutdown, stale-data alert) merged five days *after* this tag — see the note in the v0.2.0 section |
 | v0.3.0 | ✅ | **v0.3.0** (2026-11-12) | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 594-test suite |
-| v0.4.0 | ✅ | folded into **v0.3.0** | The observability work (#51, #59) merged before that release and shipped inside it; no separate tag was cut |
+| v0.3.1 | ✅ | **v0.3.1** (2026-11-12) | Documentation accuracy across 16 files, and a validation guide that instructed readers to publish their pump serial. No behaviour change |
+| ~~v0.4.0~~ | — | **was folded into v0.3.0** | The observability work (#51, #59) merged before that release and shipped inside it; no separate tag was cut. **The number was reused on 2026-11-13** for validation-day readiness — see the v0.4.0 section |
 | v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
 | v0.6.0+ | ❌ | — | Proposed, low priority |
 

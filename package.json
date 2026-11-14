@@ -1,9 +1,13 @@
 {
   "name": "carelink-bridge",
   "version": "0.3.1",
+  "private": true,
   "description": "Bridge that sends Medtronic CareLink pump and CGM data to Nightscout by simulating the CareLink mobile app's OAuth2 authentication and API calls.",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
@@ -17,9 +21,6 @@
     "drift:check": "node -e \"const fs=require('fs');const p='../carelink-api-research/regression/hurl/run.sh';if(!fs.existsSync(p)){console.error('sister repo not found at ../carelink-api-research \u2014 clone it next to this one:');console.error('  git clone https://github.com/NovaLux12/carelink-api-research.git');process.exit(2)}const miss=['hurl','jq'].filter(b=>{try{require('child_process').execFileSync('sh',['-c','command -v '+b],{stdio:'ignore'});return false}catch{return true}});if(miss.length){console.error('drift:check cannot run \u2014 missing: '+miss.join(', '));console.error('  hurl: https://github.com/Orange-OpenSource/hurl  (macOS: brew install hurl)');console.error('  jq:   https://jqlang.github.io/jq/');console.error('A missing tool is NOT vendor drift \u2014 exiting without probing.');process.exit(2)}const r=require('child_process').spawnSync(p,[],{stdio:'inherit',env:{...process.env,DELAY_MS:process.env.DELAY_MS||'2000'}});if(r.error){console.error(String(r.error.message));process.exit(2)}process.exit(r.status===null?1:r.status)\"",
     "links:check": "node scripts/check-links.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
-  },
-  "engines": {
-    "node": ">=20.0.0"
   },
   "license": "MIT",
   "keywords": [

@@ -6,12 +6,30 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: this workflow only reads the tree. Explicit rather than
+# relying on the repo default, so a change to that default cannot silently
+# widen what a PR run can do.
+permissions:
+  contents: read
+
+# One run per ref. Without this, every push to a PR branch started a full
+# duplicate 2-node matrix (v0.3.1's branch ran three times in twelve minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
-        node: [20, 22]
+        # 22 and 24. Node 20 was dropped because puppeteer-core@25 (a RUNTIME
+        # dependency, eagerly imported by src/login.ts via src/main.ts) declares
+        # engines.node >=22.12.0 — so advertising Node 20 support was a false
+        # claim, and `npm ci --engine-strict` hard-fails there. Node 20 also went
+        # EOL 2026-04-30.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -21,12 +39,32 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The artefact operators actually run. `tsc --noEmit` proves the types;
+      # only `npm run build` proves dist/ exists and that the Dockerfile and
+      # systemd unit have something to execute.
+      - run: npm run build
+      # Version drift guard. CONTRIBUTING step 1 (bump package.json, then
+      # `npm install --package-lock-only`) is load-bearing and unguarded: `npm ci`
+      # catches DEPENDENCY drift, not the package's own version, so a bump that
+      # skipped the lockfile sync passed CI silently. This is the same class of
+      # bug that hit v0.1.1 and v0.1.2.
+      - name: package.json and package-lock.json versions agree
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          LOCK=$(node -p "require('./package-lock.json').version")
+          if [ "$PKG" != "$LOCK" ]; then
+            echo "::error::package.json version ($PKG) != package-lock.json version ($LOCK)"
+            echo "Fix: npm install --package-lock-only"
+            exit 1
+          fi
+          echo "versions agree at $PKG"
 
   cross-links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Every vendor claim in this repo cites NovaLux12/carelink-api-research.
     # Those links float on `main`, so a rename on that side would silently
     # 404 them. This makes the breakage loud at PR time.
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
