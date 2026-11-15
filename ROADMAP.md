@@ -20,14 +20,15 @@ Each phase below has the same shape:
    "blocked" should name the specific thing that's missing.
 6. **Tracking** — the GitHub issue and any workboard card.
 
-## Phase status (2026-11-12)
+## Phase status (2026-11-15)
 
 **"Shipped" in this table means a tag and a release exist.** That distinction
 had to be drawn on 2026-11-12 because it had stopped being true: v0.3.0 was
 marked shipped with a date while no such tag existed anywhere, so
 `package.json` read `0.2.0` and `git tag` stopped at `v0.2.0`. **That drift is
 now closed** — `v0.3.0` was tagged and released on 2026-11-12, `v0.3.1`
-followed the same day, and `package.json` reads `0.3.1`.
+followed the same day, `v0.4.0`/`v0.4.1` on 2026-11-14, and `v0.4.2` on
+2026-11-15. `package.json` reads `0.4.2`.
 
 | Phase | Code on `main` | Tag / release | Notes |
 |-------|---------------|---------------|-------|
@@ -42,7 +43,9 @@ followed the same day, and `package.json` reads `0.3.1`.
 | v0.3.0 | ✅ | **v0.3.0** (2026-11-12) | Circuit breaker, persistent state (#58), loopback `/healthz` + `/metrics` (#59), structured logs (#51), pump **treatments** and SmartGuard **auto-mode** (#123), 73-code alarm tiering (#128), 594-test suite |
 | v0.3.1 | ✅ | **v0.3.1** (2026-11-12) | Documentation accuracy across 16 files, and a validation guide that instructed readers to publish their pump serial. No behaviour change |
 | v0.4.0 | ✅ | **v0.4.0** (2026-11-14) | **Reused number.** Originally reserved for observability, which shipped inside v0.3.0. Reassigned 2026-11-13 to validation-day readiness: v13 payload gate, treatment idempotence, vendor-derived alarm tiers, Loop/Nightscout conformance, failable `/healthz`, Node 22.12, tag-triggered release. 657-test suite |
-| v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3) and a `Dockerfile` exists, but **no image is published**; single-binary and HASS add-on not started |
+| v0.4.1 | ✅ | **v0.4.1** (2026-11-14) | The three fixes the v0.4.0 tag predates: portable `open()` flags, browser-login profile reuse, `monitor/data`'s `deviceFamily`. Plus a macOS CI leg and the GHCR publish workflow |
+| v0.4.2 | ✅ | **v0.4.2** (2026-11-15) | `doctor`: a secured Nightscout reported as unreachable, the nested `verifyauth` shape, the hardcoded discovery pin (#145). Docker `doctor:dist` / `login:dist` (#146). First release whose image is genuinely release-numbered |
+| v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3), `Dockerfile` shipped (#61), and the **image is now published** (see the v0.5.0 section); single-binary and HASS add-on not started |
 | v0.6.0+ | ❌ | — | Proposed, low priority |
 
 ---

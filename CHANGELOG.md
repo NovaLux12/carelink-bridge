@@ -12,6 +12,10 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.2] — 2026-11-15
+
 ### Fixed
 
 - **`npm run doctor` reported a correctly-secured Nightscout as unreachable.**
@@ -48,6 +52,10 @@ record, not reconstructed.
 - `ROADMAP.md` v0.5.0 now marks the published image done, and records that the
   workflow landed after `v0.4.1` was tagged, so `latest` is an unversioned
   build of `main` until the next tag.
+- **`CHANGELOG.md`'s compare-link block was two releases stale.** `[Unreleased]`
+  still pointed at `compare/v0.3.1...HEAD`, and `[0.4.0]` / `[0.4.1]` had no
+  entries at all, so every version link on the page led to the wrong diff.
+  All four are now present and point at the right boundaries.
 
 ## [0.4.1] — 2026-11-14
 
@@ -1075,7 +1083,10 @@ Carried in this repository's git history from
 - **2026-02-13** — Initial upstream implementation: CareLink mobile-app OAuth
   (three-strategy login), pump/CGM fetch, Nightscout transform and upload.
 
-[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/NovaLux12/carelink-bridge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/NovaLux12/carelink-bridge/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/NovaLux12/carelink-bridge/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/NovaLux12/carelink-bridge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NovaLux12/carelink-bridge/compare/v0.1.6...v0.2.0
