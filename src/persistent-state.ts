@@ -102,9 +102,16 @@ export function savePersistentState(filePath: string, state: PersistentState): v
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
   }
 
-  const O_CREAT = 0o100;
-  const O_WRONLY = 0o1;
-  const O_EXCL = 0o200;
+  // fs.constants, NOT hardcoded octals — same defect as the token write, in a
+  // second file, found by the macOS CI job on its first run.
+  //
+  // `O_CREAT = 0o100` / `O_EXCL = 0o200` are the LINUX values. On macOS they
+  // are 512 and 2048, so `open()` receives no valid create flag and returns
+  // ENOENT against a perfectly writable directory — which reads as a
+  // permissions problem and is not one. Effect here was broader than the token
+  // bug: savePersistentState() could never write on macOS, so the bridge lost
+  // circuit state and last-success time on every restart.
+  const { O_CREAT, O_WRONLY, O_EXCL } = fs.constants;
   const fd = fs.openSync(tmpPath, O_CREAT | O_WRONLY | O_EXCL, SECRET_FILE_MODE);
   try {
     fs.writeSync(fd, JSON.stringify(state, null, 2));

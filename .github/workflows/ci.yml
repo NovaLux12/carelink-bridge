@@ -59,6 +59,36 @@ jobs:
           fi
           echo "versions agree at $PKG"
 
+  # macOS is a SUPPORTED host (deploy/README.md, USER-GUIDE.md) and, until
+  # 2026-11-15, completely untested in CI. That gap shipped a real bug.
+  #
+  # writeLoginDataAtomic hardcoded the LINUX numeric values of O_CREAT / O_EXCL
+  # (64 / 128). On macOS they are 512 / 2048, so `open()` got no valid create
+  # flag and returned ENOENT against a perfectly writable directory. The whole
+  # OAuth login succeeded and the token could not be saved — and every test
+  # passed, because the Linux values are correct on the Linux runner.
+  #
+  # One job, one Node version, POSIX-only. It is not a second full matrix: the
+  # point is to exercise platform-specific syscalls, and Node version is
+  # orthogonal to that. The suite has explicit win32 guards, so it runs clean
+  # here without pretending to cover Windows.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The atomic-write path is the entire reason this job exists, so name it
+      # in the log rather than relying on it being somewhere in the suite.
+      - name: Platform-specific syscalls (the reason this job exists)
+        run: npx vitest run test/atomic-write.test.ts
+
   cross-links:
     runs-on: ubuntu-latest
     timeout-minutes: 10
