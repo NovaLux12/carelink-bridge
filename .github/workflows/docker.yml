@@ -1,0 +1,95 @@
+name: Docker
+
+# Publishes the bridge image to GHCR (issue #142).
+#
+# Before this, the Dockerfile existed and was documented but no image was ever
+# built or pushed — deploy/README.md told people to `docker build` locally,
+# which on a Raspberry Pi is a ten-minute compile before anything runs. The
+# Dockerfile is sound (multi-stage, non-root, HEALTHCHECK); only the
+# distribution was missing.
+#
+# Triggers:
+#   - a version tag, so a release ships an image (the main path)
+#   - manual dispatch, for a one-off rebuild without bumping a version
+# Deliberately NOT on every push to main: that would publish `edge` images
+# nobody asked for and burn Actions minutes on an artefact with no consumer.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # arm64 matters more here than for most projects: the target audience
+      # includes Raspberry Pi deployments, and an amd64-only image is useless
+      # there. QEMU emulation makes this slow but it is a tag-time job only.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags derived from the git ref, not hand-written: `v0.4.1` yields
+      # 0.4.1, 0.4, latest. `latest` is suppressed for pre-release tags so a
+      # -rc does not displace the stable image.
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/carelink-bridge
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The DEFAULT labels carry source/version/revision provenance. The
+          # Dockerfile itself has no LABEL directives at all, so without this a
+          # published image would be anonymous — no way to tell which commit
+          # built it.
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "## Published"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"
