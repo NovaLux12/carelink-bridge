@@ -362,13 +362,24 @@ of hosts, beyond the current `git clone` + systemd path.
       anywhere it matters.
 - [ ] Home Assistant add-on (low priority)
 
-**What unblocks the single-binary work:** confirming
-`puppeteer-core` (login Strategy 2) works under the chosen
-bundler. If the bundler can't include a chromium download
-mechanism, Strategy 2 may need to be split into a separate
-package, or the bridge moves to headless-only login (in
-which case `puppeteer-core` drops from the dependency list —
-see [ADR 0005](./docs/adr/0005-dependency-minimalism.md)).
+**What unblocks the single-binary work:** ~~confirming `puppeteer-core` (login
+Strategy 2) works under the chosen bundler~~ — **answered 2026-11-15.** It does.
+`esbuild --bundle --platform=node --format=esm` against `src/main.ts` produces a
+2.9 MB single file with puppeteer fully inlined that **runs**: it starts, fetches
+the discovery document and Auth0 config, and calls `puppeteer.launch()`. So the
+premise that Strategy 2 might have to split into a separate package, or that the
+bridge might go headless-only, is false.
+
+Two traps found, both recorded in [ADR 0009](./docs/adr/0009-bundling-spike-results.md):
+ESM output needs a `createRequire` banner or any CommonJS-syntax dependency dies
+with `Dynamic require of "fs" is not supported`; and the banner identifier must
+be namespaced (`import{createRequire as __cr}`), because a plain `createRequire`
+collides with puppeteer's own and the *inlined* build fails to parse.
+
+Still open: a bundle is not a static binary (it needs Node ≥ 22.12 for the
+`node:` builtins), so genuinely self-contained output needs a SEA. And Chromium
+is still not bundled — `puppeteer-core` never downloads a browser, so a host
+with no Chrome still uses Strategy 3's terminal paste.
 
 **Tracking:** [GitHub issue #11](https://github.com/NovaLux12/carelink-bridge/issues/11) (closed 2026-11-08, `NOT_PLANNED`)
 

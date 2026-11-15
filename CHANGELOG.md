@@ -12,7 +12,16 @@ record, not reconstructed.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Research
+
+- **The single-binary blocker was false.** `puppeteer-core` does survive
+  bundling: `esbuild --bundle --platform=node --format=esm` produces a 2.9 MB
+  single file with puppeteer inlined that runs and reaches
+  `puppeteer.launch()`. Strategy 2 does not need splitting into a separate
+  package, and the bridge does not need to go headless-only. Recorded in
+  [ADR 0009](./docs/adr/0009-bundling-spike-results.md) with the two traps —
+  ESM needs a `createRequire` banner, and the banner name must be namespaced or
+  it collides with puppeteer's own in the inlined build. Issue #143.
 
 ## [0.4.2] — 2026-11-15
 
