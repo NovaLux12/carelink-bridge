@@ -12,7 +12,42 @@ record, not reconstructed.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **`npm run doctor` reported a correctly-secured Nightscout as unreachable.**
+  `/api/v1/status.json` is not public on a default Nightscout —
+  `AUTH_DEFAULT_ROLES=denied` makes an unauthenticated request return `401`, so
+  doctor called a healthy server `✗ unreachable` and then returned early,
+  skipping the API-secret check that would have proved it was fine. The
+  reachability probe now sends the hashed secret, a `401`/`403` is reported as
+  *reachable but unauthorised* (one root cause, one `✗`, not two), and a bare
+  `401` with no secret configured still fails closed. Measured against a live
+  Nightscout 15.0.9: two `✗` → two `✓`; a wrong secret still exits `1`.
+- **A correct `API_SECRET` was reported as rejected.** Nightscout 15 returns a
+  nested `{message:{…,message:"OK"}}` from `/api/v1/verifyauth`; the old
+  `String(message)` produced `"[object Object]"`, which never contains `"OK"`.
+  Both the nested and the older flat shape are now read.
+- **`doctor` hardcoded the discovery pin** (`.../discover/android/3.6`) instead
+  of importing `DISCOVERY_APP_VERSION`, so moving the pin changed what login
+  probed and not what doctor probed (#145). It now uses `buildDiscoveryUrl()`
+  and names the pin in its output.
+- **Docker users had no `doctor` or `login`.** The runtime stage runs
+  `npm ci --omit=dev` and those scripts invoked `tsx`, a devDependency, so both
+  failed with `sh: 1: tsx: not found` (exit 127) — verified against the
+  published image. Added `doctor:dist` / `login:dist` running `node dist/…`,
+  which the build stage already compiles (#146).
+
+### Changed
+
+- `deploy/README.md` no longer claims the compose file still carries the `:ro`
+  token mount (it does not), and documents that the container's `login:dist`
+  has no browser — the first login stays on the host.
+- `CONTRIBUTING.md` recorded the branch-protection contexts as broken; the live
+  config is `ci (22)`, `ci (24)`, `cross-links`, matching the `[22, 24]` matrix.
+  Rewritten to keep the drift rule rather than the stale status.
+- `ROADMAP.md` v0.5.0 now marks the published image done, and records that the
+  workflow landed after `v0.4.1` was tagged, so `latest` is an unversioned
+  build of `main` until the next tag.
 
 ## [0.4.1] — 2026-11-14
 

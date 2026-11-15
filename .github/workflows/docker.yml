@@ -73,10 +73,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # The DEFAULT labels carry source/version/revision provenance. The
-          # Dockerfile itself has no LABEL directives at all, so without this a
-          # published image would be anonymous — no way to tell which commit
-          # built it.
+          # Provenance. docker/metadata-action supplies source/version/revision,
+          # and the Dockerfile declares its own static title/description/vendor/
+          # license, so the metadata layers win where both set a key — that is
+          # why the published image's description is metadata-action's, not the
+          # Dockerfile's. Each image is therefore traceable to a commit.
           provenance: true
           sbom: true
           cache-from: type=gha

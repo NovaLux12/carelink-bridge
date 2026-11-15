@@ -254,14 +254,19 @@ the arrangement that works is to put the file in the container's own writable
 filesystem and re-place it after each host-side login:
 
 ```bash
-# 1. Log in ON THE HOST — the image cannot do this (no tsx).
+# 1. Log in ON THE HOST — the image cannot do this well (no browser, and the
+#    paste fallback needs a TTY). Use the compiled entrypoint if you cloned the
+#    repo and built it: `npm run login` (tsx) works from source, `npm run
+#    login:dist` (node) works from a build.
 cd ~/carelink-bridge
 npm run doctor          # host only
 npm run login           # host only; writes ~/carelink-bridge/logindata.json
 
 # 2a. Standalone container. Persist state in a volume (see below).
 #     Either pull the published image (multi-arch: amd64 + arm64, so this works
-#     on a Raspberry Pi)…
+#     on a Raspberry Pi). Pin a version or a sha tag rather than `latest` if the
+#     deployment matters to you: `latest` is whatever `main` last built, and as
+#     of 2026-11-15 no release-numbered image exists yet (see ROADMAP).…
 docker pull ghcr.io/novalux12/carelink-bridge:latest
 docker run -d --name carelink-bridge --env-file .env \
   -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \
