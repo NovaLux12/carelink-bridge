@@ -235,10 +235,17 @@ npm run doctor          # host only
 npm run login           # host only; writes ~/carelink-bridge/logindata.json
 
 # 2a. Standalone container. Persist state in a volume (see below).
-docker build -t carelink-bridge .
+#     Either pull the published image (multi-arch: amd64 + arm64, so this works
+#     on a Raspberry Pi)…
+docker pull ghcr.io/novalux12/carelink-bridge:latest
 docker run -d --name carelink-bridge --env-file .env \
   -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \
-  carelink-bridge
+  ghcr.io/novalux12/carelink-bridge:latest
+#     …or build it locally if you want to run a commit that has no release.
+# docker build -t carelink-bridge .
+# docker run -d --name carelink-bridge --env-file .env \
+#   -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \
+#   carelink-bridge
 docker cp logindata.json carelink-bridge:/app/logindata.json
 docker restart carelink-bridge
 

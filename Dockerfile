@@ -21,6 +21,18 @@ COPY src ./src
 RUN npm run build
 
 FROM node:22-bookworm-slim
+
+# OCI provenance labels. Without these a published image is anonymous: no way
+# to tell which repository, commit or version built it. docker/metadata-action
+# supplies the values at build time; declaring them here means the labels
+# survive a plain `docker build` too, and keeps `docker inspect` useful.
+LABEL org.opencontainers.image.title="carelink-bridge" \
+      org.opencontainers.image.description="Bridge Medtronic CareLink pump and CGM data to Nightscout" \
+      org.opencontainers.image.source="https://github.com/NovaLux12/carelink-bridge" \
+      org.opencontainers.image.url="https://loopwise.uk" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Loopwise Health"
+
 WORKDIR /app
 ENV NODE_ENV=production
 # Default ON so the container-level HEALTHCHECK has something to probe.
