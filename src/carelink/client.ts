@@ -713,12 +713,26 @@ function deviceIdentity(
  * Which keys in a CareLink payload carry device identity (#111).
  *
  * Validation day needs the answer to "what family string did the cloud
- * actually send?", and the honest answer today is that nobody knows: the
- * documented vocabulary (`GUARDIAN` / `NGP` / `CGM` / `CC`) and the spellings
- * `isBleDevice()` matches (`BLE…`, `SIMPLERA…`) may not overlap at all, and
- * `CC` reportedly covers Instinct. Rather than widen the matcher on a guess,
- * log the identity keys that are present — values included — so the widening
- * can be made on evidence.
+ * actually send?" — and **part of that is now answered.** Measured 2026-11-15
+ * on a live account with a paired 780G and NO sensor and NO data:
+ *
+ *     GET /patient/monitor/data → 200, 24 bytes
+ *     {"deviceFamily":"BLE_X"}
+ *
+ * So the field exists, the casing is lowerCamel, the value is `BLE_X`, and it
+ * is populated by the PAIRING rather than by readings. `BLE_X` is one of
+ * `isBleDevice()`'s own comparison strings, so the BLE branch is taken
+ * correctly even before any data exists — the silent-zero-data failure that
+ * #81 and upstream PR #2 were about does not occur on this path.
+ *
+ * `deviceModel` was ABSENT in the same response, so only the family branch is
+ * exercised there.
+ *
+ * Still genuinely unknown: whether the vocabulary (`GUARDIAN` / `NGP` / `CGM` /
+ * `CC`) and `isBleDevice()`'s spellings (`BLE…`, `SIMPLERA…`) overlap for OTHER
+ * devices. Two vocabularies were suspected to be disjoint; `BLE_X` confirms the
+ * BLE one is what arrives at least for this pump. Do not generalise from one
+ * device — keep logging the keys so a widening can be made on evidence.
  *
  * ⚠ This output is NOT redacted. A family/model string is harmless, but
  * `deviceSerialNumber` sits in the same key list and is written to the log
