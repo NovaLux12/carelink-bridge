@@ -56,6 +56,7 @@ example.
 | [0006](./0006-no-npm-audit-in-ci.md) | No `npm audit` step in CI | Accepted |
 | [0007](./0007-node-20-plus-only.md) | Node.js 20+ only (Node 18 dropped) | Accepted |
 | [0008](./0008-branch-protection-enforce-admins.md) | Branch protection with `enforce_admins` | Accepted |
+| [0009](./0009-bundling-spike-results.md) | Bundling spike: esbuild produces a runnable single file | **Spike result** — enables a decision, does not make one |
 
 ## How to add a new ADR
 
