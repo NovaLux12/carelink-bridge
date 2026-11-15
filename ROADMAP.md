@@ -341,9 +341,20 @@ of hosts, beyond the current `git clone` + systemd path.
 - [ ] Single static binary (using `pkg` or `bun build`)
 - [x] **Dockerfile for the bridge** — ships in the repo (#61); `docker build -t carelink-bridge .`
       is the documented path in [deploy/README.md](./deploy/README.md)
-- [ ] **Published image** — no registry image is pushed and no workflow builds one.
-      Users build locally rather than pulling. (Distinct from the line above: the
-      Dockerfile exists, the *distribution* does not.)
+- [x] **Published image** — `ghcr.io/novalux12/carelink-bridge`, multi-arch
+      (`linux/amd64`, `linux/arm64` — so a Raspberry Pi works), pushed on every
+      `v*.*.*` tag plus manual dispatch (`.github/workflows/docker.yml`, #142).
+      Verified 2026-11-15 by pulling it: the manifest carries both platforms and
+      the image runs — `doctor:dist` reports and exits correctly, `/healthz`
+      answers `503 degraded` with no data yet, and the container starts.
+      **Caveat worth knowing:** the workflow landed 22 minutes *after* `v0.4.1`
+      was tagged, so that version has no image. The only build so far is a
+      manual dispatch of `main`, which produced exactly two tags —
+      `latest` and `sha-1cbff5d` — and no semver tag, because a dispatch is not
+      a tag event. So `latest` currently points at an unversioned build of
+      `main`, not at a release. The first push of a `v*.*.*` tag produces the
+      first genuinely release-numbered image; until then, prefer
+      `sha-1cbff5d` over `latest` if you need to pin.
 - [ ] Home Assistant add-on (low priority)
 
 **What unblocks the single-binary work:** confirming
