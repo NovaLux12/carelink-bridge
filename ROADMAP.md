@@ -350,14 +350,16 @@ of hosts, beyond the current `git clone` + systemd path.
       Verified 2026-11-15 by pulling it: the manifest carries both platforms and
       the image runs — `doctor:dist` reports and exits correctly, `/healthz`
       answers `503 degraded` with no data yet, and the container starts.
+      `v0.4.2` is the first release with a genuinely versioned image; its tag
+      push produced `0.4.2`, `0.4`, `0`, `latest` and `sha-1b8fc40`, all
+      verified present on the registry for both architectures.
       **Caveat worth knowing:** the workflow landed 22 minutes *after* `v0.4.1`
-      was tagged, so that version has no image. The only build so far is a
-      manual dispatch of `main`, which produced exactly two tags —
-      `latest` and `sha-1cbff5d` — and no semver tag, because a dispatch is not
-      a tag event. So `latest` currently points at an unversioned build of
-      `main`, not at a release. The first push of a `v*.*.*` tag produces the
-      first genuinely release-numbered image; until then, prefer
-      `sha-1cbff5d` over `latest` if you need to pin.
+      was tagged, so that version has no image, and the first build (a manual
+      dispatch of `main`) produced only `latest` and `sha-1cbff5d` — a dispatch
+      is not a tag event and generates no semver tag. Both are superseded now,
+      but the pattern recurs on every dispatch: **a manual rebuild replaces
+      `latest` with an unversioned build**, so pin a version or a `sha-` tag
+      anywhere it matters.
 - [ ] Home Assistant add-on (low priority)
 
 **What unblocks the single-binary work:** confirming
