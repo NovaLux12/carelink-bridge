@@ -15,6 +15,8 @@
     "dev": "tsx src/main.ts",
     "login": "tsx src/login.ts",
     "doctor": "tsx src/doctor.ts",
+    "login:dist": "node dist/login.js",
+    "doctor:dist": "node dist/doctor.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",

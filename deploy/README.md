@@ -155,9 +155,20 @@ limits that matter when you read a green result:
   `200` with stale records, and it does not touch the cumulus data track that
   the fetch actually uses.
 
-It also hardcodes the discovery pin (`android/3.6`) instead of importing
-`DISCOVERY_APP_VERSION`, so a moved pin changes what login probes but not what
-doctor probes.
+One behaviour worth knowing, because it looks like a failure and is not:
+`/api/v1/status.json` is **not public** on a default Nightscout. With
+`AUTH_DEFAULT_ROLES=denied` (the standard setting) an unauthenticated request
+gets `401`, so doctor sends the `api-secret` header on the reachability probe
+too. A `✓ Nightscout reachable` line reading `answered HTTP 401 — reachable,
+but it rejected the API secret` means the host is up and doing the right thing;
+the row beneath it is the one that decides whether the secret is right.
+(Before 2026-11-15 doctor probed status.json unauthenticated, called that
+healthy server `✗ unreachable`, and returned before ever checking the secret.)
+
+It also reports which discovery pin it probed: the URL is built from
+`DISCOVERY_APP_VERSION` via `buildDiscoveryUrl()`, the same call login uses, so
+moving the pin moves both. (Before 2026-11-15 it hardcoded `android/3.6`, so a
+moved pin changed what login probed and not what doctor probed — issue #145.)
 
 ### Start the service
 
@@ -204,11 +215,26 @@ The repo root ships a multi-stage `Dockerfile` (`node:22-bookworm-slim`,
 small runtime image, runs as `USER node`). The bridge is also wired in as
 a sibling service in `deploy/nightscout-docker-compose.yml`.
 
-**`npm run doctor` and `npm run login` do not exist inside the image.** The
-runtime stage runs `npm ci --omit=dev` and those two scripts are `tsx …`, with
+**Inside the image, use the `:dist` scripts.** The runtime stage runs
+`npm ci --omit=dev`, and `npm run doctor` / `npm run login` are `tsx …` with
 `tsx` a devDependency — so inside the container they fail with
-`sh: 1: tsx: not found`. Run both **on the host**, before building or starting
-the container. (Verified against a built image, 2026-11-14.)
+`sh: 1: tsx: not found` (verified against a built image, and against the
+published GHCR image, 2026-11-15). `dist/` is compiled in the build stage, so
+the compiled entrypoints are present; use these instead:
+
+```bash
+docker exec carelink-bridge npm run doctor:dist
+docker exec carelink-bridge npm run login:dist
+```
+
+`doctor:dist` is the same pre-flight with the same exit codes, and needs no
+`tsx`. `login:dist` runs the same three login strategies, but the image has no
+browser (and `puppeteer-core` does not download one), so Strategy 2 is
+unavailable there and it falls back to the terminal paste flow — which needs an
+interactive TTY and is therefore awkward through `docker exec`. **For a first
+login, run it on the host** and `docker cp` the resulting `logindata.json` in;
+use `login:dist` only for the re-login case where you are already attached to
+the container with a TTY.
 
 **Do not bind-mount `logindata.json` at all — not `:ro`, not `:rw`.** Token
 refresh rewrites the file atomically: `writeLoginDataAtomic` writes
@@ -217,12 +243,11 @@ bind-mounted *file* fails with **`EBUSY`** either way, and the bridge
 deliberately rethrows that errno rather than deleting the file — so once the
 access token expires, every fetch fails with a bare `EBUSY` and the container
 never re-logins. Both this page and `deploy/nightscout-docker-compose.yml`
-mounted it `:ro`; this page is corrected and **the compose file still has the
-`:ro` mount — it needs the same fix** (remove the volume and use the
-`docker cp` step below). Verified against a built image (2026-11-14):
-`writeLoginDataAtomic('/app/logindata.json')` → `EBUSY` on both a `:ro` and an
-`:rw` file mount; `unlinkSync` on the `:ro` mount → `EBUSY` too, so even the
-delete-then-re-login path fails.
+mounted it `:ro`; both are now fixed — the compose file leaves the token out
+of the image entirely and the `docker cp` step below is the write path.
+Verified against a built image (2026-11-14): `writeLoginDataAtomic('/app/logindata.json')`
+→ `EBUSY` on both a `:ro` and an `:rw` file mount; `unlinkSync` on the `:ro`
+mount → `EBUSY` too, so even the delete-then-re-login path fails.
 
 The token path is fixed at `/app/logindata.json` (it is not configurable), so
 the arrangement that works is to put the file in the container's own writable

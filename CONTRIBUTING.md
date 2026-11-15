@@ -91,16 +91,19 @@ required CI checks (the job was renamed from `test` to `ci` in
 [#45](https://github.com/NovaLux12/carelink-bridge/pull/45), and
 the required contexts follow the job name).
 
-⚠ **The required contexts are currently `ci (20)` and `ci (22)`, while the CI
-matrix is `[22, 24]`** (verified against the live branch-protection config
-2026-11-14). Node 20 was dropped from the matrix when the floor moved to 22.12
-(ADR 0007), so `ci (20)` never reports and `ci (24)` is not required — meaning a
-PR can sit blocked on a check that cannot run, and the Node 24 leg is not gating
-merges. This is a repository-settings fix (`ci (22)`, `ci (24)`), not a docs fix;
-it is recorded here so the mismatch is not mistaken for a flaky check. The
-`enforce_admins` flag is on, so even the maintainer can't
-push directly. See [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md)
-for the rationale.
+⚠ **The required contexts and the CI matrix are a pair that drifts.** They are
+`ci (22)`, `ci (24)` and `cross-links`, matching the `[22, 24]` matrix and the
+`cross-links` job — verified against the live branch-protection config
+2026-11-15. This is recorded because it *had* drifted: until 2026-11-14 the
+required contexts were `ci (20)` and `ci (22)` while the matrix was `[22, 24]`
+(Node 20 was dropped when the floor moved to 22.12, ADR 0007), so `ci (20)`
+never reported and `ci (24)` did not gate merges — a PR could sit blocked on a
+check that could not run. Whenever the matrix or the job list changes, update
+the required contexts in repository settings in the same change, or the
+protection silently stops covering the new legs. Note that `enforce_admins` is
+on, so even the maintainer cannot push directly. See
+[ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md) for the
+rationale.
 
 ## Testing with real CareLink data
 

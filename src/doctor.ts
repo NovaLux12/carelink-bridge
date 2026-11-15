@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import { loadLoginData, decodeTokenPayload } from './carelink/token.js';
+import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
 import type { LoginData } from './types/carelink.js';
 
 /**
@@ -68,16 +69,41 @@ export function checkLoginData(loginData: LoginData | null, now = Date.now()): C
 export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckResult> {
   const name = 'CareLink reachable';
   const host = isUS ? 'clcloud.minimed.com' : 'clcloud.minimed.eu';
-  const url = `https://${host}/connect/carepartner/v13/discover/android/3.6`;
+  // Built from the same constant login uses. This used to be a hardcoded
+  // `.../discover/android/3.6` literal (issue #145): moving DISCOVERY_APP_VERSION
+  // changed what login probed and left doctor checking a URL the bridge no
+  // longer used, so doctor could report a green reachability check for a pin
+  // that login had already abandoned.
+  const url = buildDiscoveryUrl(isUS);
   try {
     const { status } = await probe(url);
     if (status === 200) {
-      return { name, status: 'ok', detail: `Discovery endpoint reachable (${isUS ? 'US' : 'EU'} region).` };
+      return { name, status: 'ok', detail: `Discovery endpoint reachable (${isUS ? 'US' : 'EU'} region, pin ${DISCOVERY_APP_VERSION}).` };
     }
-    return { name, status: 'fail', detail: `Discovery endpoint returned HTTP ${status} (expected 200).` };
+    return { name, status: 'fail', detail: `Discovery endpoint returned HTTP ${status} (expected 200) for pin ${DISCOVERY_APP_VERSION}.` };
   } catch (e) {
     return { name, status: 'fail', detail: `Could not reach ${host}: ${(e as Error).message}` };
   }
+}
+
+/**
+ * Read the `message` field of a `/api/v1/verifyauth` body, upper-cased.
+ *
+ * Nightscout answers `{status:200, message:{canRead,canWrite,isAdmin,message:"OK",…}}`
+ * on current versions — a NESTED object — but older versions answered
+ * `{status:200, message:"OK"}`. Both shapes are live, so this flattens either.
+ * Getting this wrong is how a working secret gets reported as rejected: the
+ * old `String(message)` on the nested object yields "[object Object]", which
+ * contains no "OK".
+ */
+function verifyAuthMessage(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const outer = data as { message?: unknown };
+  const inner =
+    outer.message && typeof outer.message === 'object'
+      ? (outer.message as { message?: unknown }).message
+      : outer.message;
+  return typeof inner === 'string' ? inner.toUpperCase() : '';
 }
 
 export async function checkNightscout(probe: Probe, baseUrl: string | undefined, secret: string | undefined): Promise<CheckResult[]> {
@@ -88,33 +114,66 @@ export async function checkNightscout(probe: Probe, baseUrl: string | undefined,
     return [{ name: reachName, status: 'fail', detail: 'No NS URL configured.' }];
   }
   const base = baseUrl.replace(/\/+$/, '');
+  const hashed = secret ? crypto.createHash('sha1').update(secret).digest('hex') : undefined;
 
-  let reachOk = false;
+  // ⚠ `/api/v1/status.json` is NOT public on a default-install Nightscout.
+  // With `AUTH_DEFAULT_ROLES` at its standard `denied`, an unauthenticated
+  // status.json returns **401** — measured against Nightscout 15.0.9,
+  // 2026-11-15. Probing it without the secret therefore reports a perfectly
+  // healthy, correctly-secured server as "unreachable", and — because the old
+  // code returned early on `!reachOk` — it never went on to check the secret
+  // that would have proved the server was fine. A false ✗ on the single check
+  // most likely to be read before a first start.
+  //
+  // So the reachability probe carries the secret when one is configured. A 401
+  // WITH a secret present is no longer a reachability failure — the host
+  // answered, which is what reachability means — it is an auth failure, and
+  // verifyauth below is what names it.
+  let reachStatus: number | undefined;
   const results: CheckResult[] = [];
   try {
-    const { status } = await probe(`${base}/api/v1/status.json`);
-    reachOk = status === 200;
-    results.push(
-      reachOk
-        ? { name: reachName, status: 'ok', detail: `${base} responded 200.` }
-        : { name: reachName, status: 'fail', detail: `${base}/api/v1/status.json returned HTTP ${status}.` },
+    const { status } = await probe(
+      `${base}/api/v1/status.json`,
+      hashed ? { 'api-secret': hashed } : undefined,
     );
+    reachStatus = status;
   } catch (e) {
     results.push({ name: reachName, status: 'fail', detail: `Could not reach ${base}: ${(e as Error).message}` });
     return results;
   }
 
-  if (!reachOk || !secret) {
+  if (reachStatus === 200) {
+    results.push({ name: reachName, status: 'ok', detail: `${base} responded 200.` });
+  } else if ((reachStatus === 401 || reachStatus === 403) && hashed) {
+    // The server answered and refused us: reachable, and the reason is auth.
+    // Report reachability as OK and let the secret check carry the failure, so
+    // one root cause produces one ✗ rather than two.
+    results.push({
+      name: reachName,
+      status: 'ok',
+      detail: `${base} answered HTTP ${reachStatus} — reachable, but it rejected the API secret (see the next check).`,
+    });
+  } else {
+    results.push({
+      name: reachName,
+      status: 'fail',
+      detail: `${base}/api/v1/status.json returned HTTP ${reachStatus}.`,
+    });
+    return results;
+  }
+
+  if (!secret) {
     return results;
   }
 
   // /api/v1/verifyauth reports whether the api-secret is accepted, without writing.
   try {
-    const hashed = crypto.createHash('sha1').update(secret).digest('hex');
-    const { status, data } = await probe(`${base}/api/v1/verifyauth`, { 'api-secret': hashed });
-    const message = (data && typeof data === 'object' && 'message' in data ? String((data as { message: unknown }).message) : '').toUpperCase();
+    const { status, data } = await probe(`${base}/api/v1/verifyauth`, { 'api-secret': hashed! });
+    const message = verifyAuthMessage(data);
     if (status === 200 && message.includes('OK')) {
       results.push({ name: authName, status: 'ok', detail: 'API_SECRET accepted by Nightscout.' });
+    } else if (status === 401 || status === 403) {
+      results.push({ name: authName, status: 'fail', detail: `API_SECRET rejected (HTTP ${status}). Check it matches your Nightscout site.` });
     } else {
       results.push({ name: authName, status: 'fail', detail: `API_SECRET rejected (verifyauth said "${message || 'HTTP ' + status}"). Check it matches your Nightscout site.` });
     }
