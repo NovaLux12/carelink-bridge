@@ -9,11 +9,22 @@ export interface CareLinkSG {
   version: number;
   timeChange: boolean;
   kind: 'SG';
-  // Per-reading fields from the RecentData payload (#85). sensorState lets a
-  // warm-up or calibration-required reading be distinguished from a normal
-  // one; relativeOffset is per-reading offset data and the natural input for
-  // the whole-hour pump-offset rounding (kept separate from the timestamp
-  // semantics — see src/transform/pump-offset.ts).
+  // Per-reading optional fields (#85). `sensorState` lets a warm-up or
+  // calibration-required reading be distinguished from a normal one, and is
+  // published on the devicestatus `connect` block when present.
+  //
+  // ⚠ `relativeOffset` does NOT belong here semantically, and reading it here
+  // would be wrong. The only source that describes it
+  // (`findings-log/probe-2026-10-08/APP-EMULATION-RESEARCH.md`) lists it as a
+  // **Marker** field — the treatments schema — not a `SensorGlucose` field; it
+  // does not occur in either the patient eager bundle or the lazy chunk that
+  // carries the marker parser (searched 2026-11-15, zero hits in both). It is
+  // kept declared only because a reading that does carry it should not be
+  // silently reshaped to drop the key. Timestamp correction is done once, at
+  // payload level, from the conduit/device clock pair in
+  // `src/transform/pump-offset.ts` — never per reading — so this field is not
+  // an input to it and must not become one without a real captured payload
+  // showing what its unit and epoch actually are. See issue #147.
   sensorState?: string;
   relativeOffset?: number;
   /**

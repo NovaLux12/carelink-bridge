@@ -221,3 +221,47 @@ describe('no cross-call state: logging is a pure function of the payload', () =>
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #147: `relativeOffset` must not become an offset input without
+// evidence. The field is a MARKER field in the only source that describes it,
+// it occurs nowhere in the vendor's patient bundles, and the offset is applied
+// once per payload from the clock pair — not per reading.
+//
+// These tests pin that boundary. If someone later wires a per-reading
+// `relativeOffset` into the offset path, the first test fails and they have to
+// justify it against a real captured payload, which is what #147 asks for.
+// ---------------------------------------------------------------------------
+describe('relativeOffset is not an offset input (issue #147)', () => {
+  it('ignores a relativeOffset planted on each reading', () => {
+    const server = 1_760_000_000_000;
+    const base = {
+      lastConduitUpdateServerDateTime: server,
+      lastConduitDateTime: server + 2 * HOUR,
+    };
+
+    const withoutReadings = guessPumpOffsetMilliseconds(base as CareLinkData);
+    const withReadings = guessPumpOffsetMilliseconds({
+      ...base,
+      // A value that would produce a wildly different offset if consumed.
+      sgs: [
+        { sg: 120, version: 1, timeChange: false, kind: 'SG', relativeOffset: 7 * HOUR },
+        { sg: 118, version: 1, timeChange: false, kind: 'SG', relativeOffset: -3 * HOUR },
+      ],
+    } as unknown as CareLinkData);
+
+    expect(withReadings).toBe(withoutReadings);
+    expect(withReadings).toBe(2 * HOUR);
+  });
+
+  it('still derives the offset from the clock pair when readings are present', () => {
+    const server = 1_760_000_000_000;
+    const reading = pumpClockReading({
+      lastConduitUpdateServerDateTime: server,
+      lastConduitDateTime: server + 90 * MINUTE,
+      sgs: [{ sg: 120, version: 1, timeChange: false, kind: 'SG', relativeOffset: 0 }],
+    } as unknown as CareLinkData);
+    expect(reading?.offsetMs).toBe(90 * MINUTE);
+    expect(reading?.label).toBe('conduit');
+  });
+});
