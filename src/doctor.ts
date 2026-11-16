@@ -3,7 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import { loadLoginData, decodeTokenPayload } from './carelink/token.js';
-import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
+import {
+  DISCOVERY_APP_VERSION,
+  buildDiscoveryUrl,
+  CUMULUS_V13_PATH_SUFFIX,
+  VERIFIED_AUTH0_V13_FAMILY,
+} from './discovery.js';
 import { siblingDataFile } from './data-paths.js';
 import type { LoginData } from './types/carelink.js';
 
@@ -106,6 +111,59 @@ export async function probeDiscovery(
       document: undefined,
     };
   }
+}
+
+/**
+ * Report the cumulus track the discovery document declares for this region.
+ *
+ * The gate itself lives in `login-errors.ts` (`assertSupportedCumulusTrack`) and
+ * only fires during login. Doctor's job is to *say what it saw* before anyone
+ * attempts a login, because "login works, then the data call fails with no named
+ * error" is the #75 failure mode — an off-track pin that passes every
+ * key-presence check.
+ *
+ * Deliberately reports rather than gates: a non-v13 track is a `fail` here
+ * because the bridge cannot use it, but the message names the observed URL so
+ * the fix is obvious. An entry with no `baseUrlCumulus` at all is also a `fail`
+ * for the same reason — the data plane is unknown, and guessing it is what
+ * issue #75 exists to prevent.
+ */
+export function checkCumulusTrack(document: unknown, region: string): CheckResult {
+  const name = 'CareLink cumulus track';
+  const cp = (document as { CP?: unknown } | null)?.CP;
+  if (!Array.isArray(cp)) {
+    return { name, status: 'warn', detail: 'Discovery document carried no readable CP[] entries, so the track could not be read.' };
+  }
+
+  const entry = cp.find(
+    (e): e is { region?: unknown; baseUrlCumulus?: unknown } =>
+      !!e && typeof e === 'object' && String((e as { region?: unknown }).region).toUpperCase() === region.toUpperCase(),
+  );
+  if (!entry) {
+    return { name, status: 'warn', detail: `Discovery document has no CP entry for region ${region}, so the track could not be read.` };
+  }
+
+  const cumulus = entry.baseUrlCumulus;
+  if (typeof cumulus !== 'string') {
+    return {
+      name,
+      status: 'fail',
+      detail: `Region ${region} declares no baseUrlCumulus, so the data plane is unknown. ` +
+        `This bridge requires "${CUMULUS_V13_PATH_SUFFIX}" (issue #75).`,
+    };
+  }
+
+  if (cumulus.endsWith(CUMULUS_V13_PATH_SUFFIX)) {
+    return { name, status: 'ok', detail: `Region ${region} declares ${cumulus} — the v13 track this bridge requires.` };
+  }
+
+  return {
+    name,
+    status: 'fail',
+    detail: `Region ${region} declares ${cumulus}, which is NOT the "${CUMULUS_V13_PATH_SUFFIX}" track this bridge requires. ` +
+      `Login would succeed and the data call would then fail with no named error — the #75 failure. ` +
+      `Keep DISCOVERY_APP_VERSION on ${VERIFIED_AUTH0_V13_FAMILY.join(', ')}.`,
+  };
 }
 
 export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckResult> {
@@ -316,7 +374,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<CheckResult[]> {
     discovery.result,
     // Only meaningful when the document actually arrived; a failed reachability
     // check already says why, and a second ✗ for the same cause is noise.
-    ...(discovery.document !== undefined ? [checkRegion(discovery.document, env)] : []),
+    ...(discovery.document !== undefined
+      ? [checkRegion(discovery.document, env), checkCumulusTrack(discovery.document, isUS ? 'US' : 'EU')]
+      : []),
     ...(await checkNightscout(probe, nsUrl, secret)),
   ];
   return results;

@@ -5,6 +5,7 @@ import {
   checkCareLink,
   checkNightscout,
   checkRegion,
+  checkCumulusTrack,
   countryRegions,
   formatResults,
   type Probe,
@@ -313,5 +314,59 @@ describe('checkRegion()', () => {
     const r = checkRegion(discoveryDoc, { MMCONNECT_SERVER: 'EU', MMCONNECT_COUNTRYCODE: 'ZZ' });
     expect(r.status).toBe('warn');
     expect(r.detail).toContain('ZZ');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cumulus track (issue #145's "report the track actually seen").
+//
+// The gate only fires during login. Doctor reporting it means an off-track pin
+// is visible BEFORE anyone attempts a login — and the #75 failure mode is
+// precisely "login succeeds, then the data call fails with no named error".
+// ---------------------------------------------------------------------------
+
+const docWithTrack = (cumulus: string | undefined) => ({
+  CP: [
+    { region: 'US', baseUrlCumulus: 'https://clcloud.minimed.com/connect/carepartner/v13' },
+    cumulus === undefined ? { region: 'EU' } : { region: 'EU', baseUrlCumulus: cumulus },
+  ],
+});
+
+describe('checkCumulusTrack()', () => {
+  it('passes on the v13 track', () => {
+    const r = checkCumulusTrack(docWithTrack('https://clcloud.minimed.eu/connect/carepartner/v13'), 'EU');
+    expect(r.status).toBe('ok');
+    expect(r.detail).toContain('v13');
+  });
+
+  it('FAILS on the v11 track — the android/3.5 trap from #75', () => {
+    // 3.5 selects Auth0SSOConfiguration, so every key-presence check passes;
+    // only the track reveals it. This is the row that makes that visible early.
+    const r = checkCumulusTrack(docWithTrack('https://clcloud.minimed.eu/connect/carepartner/v11'), 'EU');
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('v11');
+    expect(r.detail).toContain('no named error');
+  });
+
+  it('FAILS when the region declares no baseUrlCumulus at all', () => {
+    const r = checkCumulusTrack(docWithTrack(undefined), 'EU');
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('no baseUrlCumulus');
+  });
+
+  it('reads the region it was asked about, not the first entry', () => {
+    const r = checkCumulusTrack(docWithTrack('https://clcloud.minimed.eu/connect/carepartner/v13'), 'US');
+    expect(r.detail).toContain('clcloud.minimed.com');
+  });
+
+  it('warns when the region has no CP entry', () => {
+    const r = checkCumulusTrack(docWithTrack('https://clcloud.minimed.eu/connect/carepartner/v13'), 'CLINICAL');
+    expect(r.status).toBe('warn');
+  });
+
+  it('warns, not throws, when CP[] is missing or malformed', () => {
+    for (const bad of [{}, null, undefined, { CP: 'nope' }]) {
+      expect(checkCumulusTrack(bad, 'EU').status).toBe('warn');
+    }
   });
 });
