@@ -90,9 +90,20 @@ const files = [...walk(ROOT)];
 
 const urls = extract(files);
 
-if (urls.size === 0) {
-  console.log('links:check — no cross-repo URLs found (nothing to check).');
-  process.exit(0);
+if (urls.size === 0 && files.length > 0) {
+  // A scanner that finds no cross-repo URLs in this repo is BROKEN, not passing.
+  // The tree has ~20 of them; zero means the regex or the walk regressed, and
+  // this check would have reported green for a repo it never actually read.
+  console.error(
+    `links:check FAILED — scanned ${files.length} files and found no ${REPO} URLs. ` +
+      'This repo links to that repo; a zero count means the extractor or the file walk is broken.'
+  );
+  process.exit(1);
+}
+
+if (files.length === 0) {
+  console.error('links:check FAILED — no files were scanned at all.');
+  process.exit(1);
 }
 
 console.log(`links:check — ${urls.size} distinct ${REPO} URLs across ${files.length} files\n`);
@@ -138,11 +149,30 @@ for (const [url, locs] of urls) {
       detail = ` (network error, not a verdict on the link: ${e.message})`;
       networkErrors++;
     }
-    // A 200 here does not prove the template exists — GitHub answers 200 for a
-    // bogus `?template=` too — so say so rather than letting it read as verified.
-    if (tmpl && status >= 200 && status < 400) {
-      unverified.push(url);
-      console.log(`SKIP ${url}  (HTTP ${status} does not prove the issue template exists — pass offline to check it)`);
+    // A 200 on the issue-form route does not prove the template exists — GitHub
+    // answers 200 for a bogus `?template=` too. Resolve the template FILE over
+    // the network instead: raw.githubusercontent.com returns 404 for a missing
+    // one (measured 2026-11-16: 01-new-finding.yml -> 200, a deleted form ->
+    // 404). Skipping it and exiting 0, which this did until now, meant the one
+    // contributor-funnel link in the repo was never verified by the required
+    // `cross-links` check.
+    if (tmpl) {
+      let tplStatus = 0;
+      try {
+        const res = await fetch(
+          `https://raw.githubusercontent.com/${REPO}/main/${tmpl}`,
+          { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(20_000) },
+        );
+        tplStatus = res.status;
+      } catch (e) {
+        console.log(`NET  ${url}  (template fetch failed: ${e.message})`);
+        networkErrors++;
+        unverified.push(url);
+        continue;
+      }
+      const tplOk = tplStatus === 200;
+      console.log(`${tplOk ? 'ok  ' : 'FAIL'} ${url}  (template ${tmpl} -> HTTP ${tplStatus})`);
+      if (!tplOk) problems.push(`${url} → issue template ${tmpl} returned HTTP ${tplStatus}${where}`);
       continue;
     }
     const ok = status >= 200 && status < 400;

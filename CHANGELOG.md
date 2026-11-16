@@ -14,6 +14,42 @@ record, not reconstructed.
 
 ### Fixed
 
+- **CI verified that things were BUILT, not that they WORKED — four gaps closed.**
+  Each one was falsified locally (broken on purpose, observed red) before the
+  check was trusted.
+  - **Nothing read `dist/`.** Deleting `dist/main.js`, `dist/doctor.js` and
+    `dist/login.js` after a successful `npm run build` left `typecheck`, `test`
+    and `bundle` all green — the tests import `src/` and esbuild reads `src/`,
+    so no step had ever looked at the build output. `scripts/verify-dist.mjs`
+    now asserts the entrypoints exist, that every `dist/*.js` path named by
+    `package.json`, the systemd unit and the Dockerfile resolves, and that
+    `dist/main.js` loads its own module graph (it must reach its own
+    `Missing CARELINK_USERNAME`, not an `ERR_MODULE_NOT_FOUND`). Runs in the
+    Node matrix, on macOS (where the atomic-write bug shipped from) and in the
+    release job.
+  - **The Dockerfile was built but never exercised.** `scripts/verify-image.sh`
+    runs inside the image and asserts `node dist/doctor.js` and
+    `npm run doctor:dist` reach the config row (exit 1, not 127), the CMD
+    entrypoint loads, `node_modules/.bin/tsx` is absent, the image is non-root
+    and still has its HEALTHCHECK. A new `image` job builds and runs it on every
+    PR. This is the class of bug that published an image where `npm run doctor`
+    died with `tsx: not found`.
+  - **The version-drift guard was bypassable.** It compared only the lockfile's
+    top-level `version`. Setting `packages[""].version` — the field npm's own
+    resolver reads — to a stale value left it green, and `npm ci` did not
+    object either. Widening a dependency range was also invisible: `qs:
+    ^6.17.1` → `^6.0.0` passes `npm ci` because the locked 6.17.1 satisfies
+    both. `scripts/check-version-sync.mjs` compares version, `packages[""]`,
+    name, dependency and devDependency range maps and `engines.node`, and takes
+    `--tag` on the release path.
+  - **`links:check` could not fail on the one link it could not check, and a
+    zero-result scan passed.** Online mode SKIPped `?template=` links (GitHub
+    answers 200 for a bogus template) and exited 0, so the contributor-funnel
+    link was never verified by the required `cross-links` job; it now resolves
+    the template file over `raw.githubusercontent.com`, which 404s correctly
+    (falsified with a renamed form). A scan that found no cross-repo URLs at all
+    also exited 0; that is now a failure.
+
 - **The single-file bundle resolved its data files outside its own directory.**
   Every module that needed `logindata.json` / `state.json` hardcoded how far up
   the package root was — `'..'` from `dist/main.js`, `dist/login.js` and
@@ -29,6 +65,10 @@ record, not reconstructed.
   A structural test scans `src/` so a fifth hand-rolled path cannot reappear.
 
 ### Added
+
+- **`npm run verify:dist` / `verify:sync` / `verify:image`** — the three CI
+  checks above, runnable locally. `verify:image` needs a built image
+  (`docker build -t carelink-bridge:ci .` first).
 
 - **`doctor` cross-checks your region.** A new `CareLink region` row compares
   the country (`MMCONNECT_COUNTRYCODE`, default `gb`) against the region

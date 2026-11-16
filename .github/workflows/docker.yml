@@ -31,6 +31,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # This job BUILDS and PUSHES; it does not run the image. The thing that runs
+    # it is the `image` job in ci.yml, which builds the same Dockerfile and
+    # executes doctor, doctor:dist and the CMD entrypoint inside it on every PR.
+    # That split is deliberate: a multi-arch QEMU build is too slow to repeat,
+    # and the failures worth catching (a missing dist/ file, tsx absent, a
+    # broken entrypoint) are architecture-independent and belong at PR time.
+    # If you change the Dockerfile's runtime stage, the `image` job is what will
+    # tell you whether the image still works before this job publishes it.
     steps:
       - uses: actions/checkout@v7
 
