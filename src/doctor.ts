@@ -221,15 +221,20 @@ const isMainModule = process.argv[1] &&
   (path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url).replace(/\.ts$/, '.js')));
 
-if (isMainModule) {
-  const dotenv = await import('dotenv');
-  dotenv.config();
-
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  // Same resolution login uses. This used to be a second copy of
-  // `path.join(__dirname, '..', 'logindata.json')`, which is how doctor and
-  // login could disagree about where the token lives — particularly in the
-  // single-file bundle, where `'..'` lands one directory above the bundle.
+/**
+ * Run the doctor CLI and return its exit code.
+ *
+ * Extracted from the `isMainModule` block so the single-file bundle can call it
+ * too. `isMainModule` cannot work in a bundle: the bundle's `import.meta.url`
+ * IS `process.argv[1]`, so every bundled CLI module would see `isMainModule`
+ * true at once. That made `npm run bundle` produce an artefact with no doctor
+ * in it at all — the same gap #146 fixed for Docker, reintroduced in a new
+ * distribution path.
+ *
+ * Returns the exit code rather than calling `process.exit`, so the caller
+ * decides (a subcommand dispatcher should not be killed by its own callee).
+ */
+export async function doctorCli(): Promise<number> {
   const loginDataPath = siblingDataFile(import.meta.url, 'logindata.json');
 
   const probe: Probe = async (url, headers) => {
@@ -246,7 +251,14 @@ if (isMainModule) {
   console.log('');
   if (failed > 0) {
     console.log(`${failed} check(s) failed. Fix the above before running "npm start".`);
-    process.exit(1);
+    return 1;
   }
   console.log(warned > 0 ? `Ready, with ${warned} warning(s) to note.` : 'All checks passed — ready to run "npm start".');
+  return 0;
+}
+
+if (isMainModule) {
+  const dotenv = await import('dotenv');
+  dotenv.config();
+  process.exit(await doctorCli());
 }

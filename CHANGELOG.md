@@ -30,10 +30,15 @@ record, not reconstructed.
 
 ### Added
 
-- **`npm run bundle`** — builds `dist-bundle/carelink-bridge.mjs` (2.9 MB, with
+- **`npm run bundle`** — builds `dist-bundle/carelink-bridge.mjs` (3.0 MB, with
   `puppeteer-core` inlined) and then *executes* it, failing with a named cause
-  on either bundling trap recorded in ADR 0009. It runs in CI, so the artefact
-  cannot rot silently. See [ADR 0009](./docs/adr/0009-bundling-spike-results.md).
+  on either bundling trap recorded in ADR 0009. The artefact carries the same
+  three commands as the source build — run, `doctor`, `login` — because it is
+  built from `src/bundle-main.ts` rather than `main.ts`, which does not import
+  either CLI module. The build asserts both subcommands exist, so a bundle
+  without `doctor` (the same gap #146 closed for Docker) fails the build. It
+  runs in CI, so the artefact cannot rot silently. See
+  [ADR 0009](./docs/adr/0009-bundling-spike-results.md).
 
 ### Research
 

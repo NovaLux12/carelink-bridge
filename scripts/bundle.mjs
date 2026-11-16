@@ -53,7 +53,10 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   await build({
-    entryPoints: [path.join(ROOT, 'src', 'main.ts')],
+    // NOT `main.ts`: that entry ships the daemon only, with no doctor and no
+    // standalone login (#146's gap, reintroduced in a new distribution path).
+    // `bundle-main.ts` adds subcommand dispatch on top of the same modules.
+    entryPoints: [path.join(ROOT, 'src', 'bundle-main.ts')],
     outfile: OUT_FILE,
     bundle: true,
     platform: 'node',
@@ -108,7 +111,46 @@ async function main() {
   }
 
   console.log('smoke    the bundle loads (module graph resolved)');
-  console.log(`\nrun it:  node ${path.relative(ROOT, OUT_FILE)}`);
+
+  // The bundle must expose doctor and login, not just the daemon. Shipping
+  // without them is exactly the gap #146 closed for Docker, and it is invisible
+  // unless something asks: `main.ts` does not import either module, so a bundle
+  // built from it silently contains neither.
+  const sub = spawnSync(process.execPath, [OUT_FILE, 'doctor'], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    timeout: 60_000,
+    env: { ...process.env, CARELINK_USERNAME: '', CARELINK_PASSWORD: '', API_SECRET: '', NS: '' },
+  });
+  const subOut = `${sub.stdout ?? ''}${sub.stderr ?? ''}`;
+  const missing = [
+    ['carelink-bridge doctor', 'the doctor subcommand did not run'],
+    ['Config (.env)', 'doctor ran but produced no config row'],
+  ].filter(([needle]) => !subOut.includes(needle));
+
+  if (missing.length > 0) {
+    console.error('\nthe bundle ships no working `doctor` subcommand:');
+    for (const [, why] of missing) console.error(`  ${why}`);
+    console.error('\n--- output ---\n' + subOut.split('\n').slice(0, 25).join('\n'));
+    console.error('\nA bundle without doctor is the same gap as #146. Build from');
+    console.error('src/bundle-main.ts, not src/main.ts.');
+    process.exit(1);
+  }
+
+  console.log('smoke    `doctor` subcommand present and reporting');
+
+  const help = spawnSync(process.execPath, [OUT_FILE, '--help'], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    timeout: 30_000,
+  });
+  if (!`${help.stdout ?? ''}`.includes('carelink-bridge doctor')) {
+    console.error('\nthe bundle has no --help output listing its subcommands');
+    process.exit(1);
+  }
+  console.log('smoke    `--help` lists the subcommands');
+
+  console.log(`\nrun it:  node ${path.relative(ROOT, OUT_FILE)} [doctor|login]`);
   console.log('note:    needs Node >= 22.12; Chromium is NOT included (see docs/adr/0009).');
 }
 
