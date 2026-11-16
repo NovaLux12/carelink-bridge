@@ -268,12 +268,14 @@ NS=https://your-nightscout-site.example.com
 MMCONNECT_SERVER=US
 ```
 
-The default is `EU` (Europe). `npm run doctor` will **not** tell you if this is
-wrong: its `CareLink reachable` check prints "Discovery endpoint reachable (EU
-region)" whenever the host answers HTTP 200, and both hosts answer 200 from
-anywhere — the EU/US split only selects which hostname and metadata is used
-(see [ADR 0002](./docs/adr/0002-discovery-app-version-pin.md)). If you are
-unsure, set it explicitly rather than expecting the doctor to catch it.
+The default is `EU` (Europe). Set it explicitly if you are in the US: the
+`CareLink region` row cross-checks your country (`MMCONNECT_COUNTRYCODE`,
+default `gb`) against the region `MMCONNECT_SERVER` selects, and shows `✗` when
+they disagree — a US account left on the EU default fails there, not on
+`CareLink reachable` (both hosts answer 200 from anywhere; the EU/US split only
+selects which hostname and metadata is used — see
+[ADR 0002](./docs/adr/0002-discovery-app-version-pin.md)). Set the country too
+if it is not `gb`, or the row reports a mismatch against the wrong region.
 
 **Save the file.** Don't share it with anyone. Don't paste it
 into chat. Don't commit it to git (the bridge's `.gitignore`
@@ -299,13 +301,14 @@ ending with `All checks passed — ready to run "npm start".`
 If anything fails, the doctor will tell you exactly what.
 
 **What it does not check** (worth knowing before you trust a green result):
-it never attempts a login, so it cannot see an MFA/CAPTCHA failure; it makes no
-data call, so it cannot distinguish a `204`, a `206 Upgrade application`, or a
-stale-but-200 response; and it probes the discovery document only, not the
-cumulus data track. A missing `logindata.json` is reported as `!` (warning),
+it never attempts a login, so it cannot see an MFA/CAPTCHA failure; and it makes
+no data call, so it cannot distinguish a `204`, a `206 Upgrade application`, or a
+stale-but-200 response. It reads the discovery document and reports the cumulus
+track that document *declares* (`CareLink cumulus track`), but it never fetches
+from that track. A missing `logindata.json` is reported as `!` (warning),
 not `✗`, and does **not** change the exit code — so a green doctor is not proof
-the bridge can fetch. `npm run doctor` proves config, reachability and the
-Nightscout secret; nothing more.
+the bridge can fetch. `npm run doctor` proves config, region, the declared track,
+reachability and the Nightscout secret; nothing more.
 
 ## Step 6: Log into CareLink
 
@@ -317,22 +320,23 @@ gets them by logging in on your behalf.
 npm run login
 ```
 
-What happens next depends on your account:
+What happens next depends on your account and your machine. (Strategy 1 —
+posting your password straight to Auth0 — is **known not to work**: Auth0's login
+page is rendered in JavaScript and serves no `<form>` element to scrape, so the
+bridge falls through. See
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#strategy-1-is-broken-and-the-reason-is-structural-measured-2026-11-14).)
 
-- **If it just works:** you'll see a success message and the
-  bridge will save your tokens to `logindata.json`. Move on
-  to Step 7.
 - **If a browser window opens:** CareLink wants you to
   complete a CAPTCHA or multi-factor authentication in a
   real browser. The bridge will open Chrome / Edge / Chromium
   automatically. Log in like you normally do. The window
-  will close itself when it's done.
-- **If neither happens and you see a URL printed:** your
+  will close itself when it's done. This is the normal path on a desktop.
+- **If no browser opens and you see a URL printed:** your
   environment doesn't have a browser the bridge can use.
   Copy the URL, paste it into any browser, log in, then copy
   the URL the browser redirects you to (it will contain
   `code=...`), and paste it back into the terminal. Press
-  Enter.
+  Enter. This is the normal path on a headless server.
 
 You only need to do this once. Your tokens are saved in
 `logindata.json` and the bridge will refresh them
@@ -462,6 +466,9 @@ The bridge tracks in-memory counters with zero dependencies (`src/metrics.ts`):
 - `carelink_last_success_timestamp_seconds` (gauge)
 - `carelink_circuit_open` (gauge: 1 = circuit open, 0 = closed)
 - `carelink_fetch_duration_ms` (summary: p50/p90/p99, sum, count)
+- `carelink_data_age_seconds` (gauge; `-1` = no reading seen yet)
+- `carelink_upload_failures_total{endpoint,reason}` (closed label sets)
+- `carelink_stale` (gauge: 1 = past the stale threshold, 0 = not)
 
 They are served over HTTP only when you opt in — set `CARELINK_METRICS_PORT=8081`
 in your `.env` and restart. The server binds `127.0.0.1` only (loopback, no
@@ -481,7 +488,7 @@ Nothing user-identifying is served — all labels are low-cardinality
 If your pump hasn't arrived yet, you can still get everything else ready so data flows within ~5 minutes of `npm run login`. This is the checklist tracked in [issue #7](https://github.com/NovaLux12/carelink-bridge/issues/7):
 
 1. **Bridge host** — `bash deploy/install.sh` on the machine that will run the bridge; create `~/carelink-bridge/.env` from `deploy/systemd/carelink-bridge.env.example`; fill in `CARELINK_USERNAME`, `CARELINK_PASSWORD`, `API_SECRET`, `NS`; `chmod 600 ~/carelink-bridge/.env`; verify with `systemd-analyze --user verify deploy/systemd/carelink-bridge.service`.
-2. **Nightscout** — bring up your Nightscout site and confirm it responds (`curl https://your-nightscout/api/v1/status.json` → `200`); note the exact `NS` URL and `API_SECRET` — they must match the bridge's `.env`.
+2. **Nightscout** — bring up your Nightscout site and confirm the host answers. `curl https://your-nightscout/api/v1/status.json` returns **`401` on a default install** (`AUTH_DEFAULT_ROLES=denied` makes status.json non-public), which is a healthy server, not a fault; a `200` means that setting is open. Note the exact `NS` URL and `API_SECRET` — they must match the bridge's `.env`. `npm run doctor` is the check that distinguishes "up" from "secret rejected".
 3. **Pre-flight without a pump** — `npm run doctor` should show `✓` for `Config (.env)`, `CareLink reachable`, `Nightscout reachable`, and `Nightscout API secret`. `CareLink login (logindata.json)` will show `!` (warn) until you have logged in — expected before pairing, and expected again before you run `npm run login`.
 4. **Day the pump arrives** — pair the pump in the CareLink app, then `cd ~/carelink-bridge && npm run login` (one-time OAuth), `systemctl --user start carelink-bridge`, `journalctl --user -u carelink-bridge -f` and watch for `Fetch succeeded` within ~10 s; check `https://your-nightscout/api/v1/entries.json?count=10` for fresh SGVs.
 

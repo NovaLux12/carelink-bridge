@@ -124,12 +124,15 @@ value, the same source `nightscout-connect` and
 ## v0.1.6 — `npm run doctor` (shipped 2026-07-19)
 
 - [x] `npm run doctor` — pre-flight self-check (env vars, CareLink reachable, Nightscout reachable, login token valid)
-- [x] Discovery app-version string is now a documented constant in `src/discovery.ts`
+- [x] Discovery app-version string is now a documented constant (in `src/login.ts` at this tag; extracted into `src/discovery.ts` in v0.2.0 — see below)
 
 **Why this exists:** "why is no data showing up" used to
 require reading logs and guessing. `npm run doctor` turns
 that into a specific, named failure in one command. Exit
-code is non-zero on failure so it can gate a deploy.
+code is non-zero when a check reports `✗`, so it can gate a
+deploy — but only on that: a `!` (warning) row, including a
+missing `logindata.json`, still exits `0`. See the exit-code
+note in [deploy/README.md](./deploy/README.md#pre-flight-check-npm-run-doctor).
 
 ## v0.2.0 — safety + reliability hardening (shipped 2026-07-22)
 
@@ -538,7 +541,7 @@ are listed because their closures are the record of what shipped):
 | Pre-pump operator checklist | [#7](https://github.com/NovaLux12/carelink-bridge/issues/7) | **closed 2026-08-20** (`COMPLETED`) — folded into #51 as the checklist section |
 | v0.3.0 reliability | [#9](https://github.com/NovaLux12/carelink-bridge/issues/9) | **closed 2026-09-08** (`COMPLETED`) — shipped in #58; the rest of the phase released as v0.3.0 |
 | v0.4.0 observability | [#10](https://github.com/NovaLux12/carelink-bridge/issues/10) | **closed 2026-11-08** (`COMPLETED`) — items shipped in #51 and #59 and released in v0.3.0 |
-| v0.5.0 distribution (remaining) | [#11](https://github.com/NovaLux12/carelink-bridge/issues/11) | **closed 2026-11-08** (`NOT_PLANNED`) — Dockerfile shipped (#61); published image, static binary and HA add-on went unpursued |
+| v0.5.0 distribution (remaining) | [#11](https://github.com/NovaLux12/carelink-bridge/issues/11) | **closed 2026-11-08** (`NOT_PLANNED`) — Dockerfile shipped (#61); the published image shipped afterwards (#142, see the v0.5.0 section); static binary and HA add-on went unpursued |
 | Real-data discoveries tracker | [#12](https://github.com/NovaLux12/carelink-bridge/issues/12) | **open** — validation day not yet run |
 | Low-priority repo hygiene | [#13](https://github.com/NovaLux12/carelink-bridge/issues/13) | **closed 2026-07-28** (`COMPLETED`) — done in #45 (Discussions, secret scanning, CI job rename) |
 | Reports API (unintegrated, token-gated) | [#76](https://github.com/NovaLux12/carelink-bridge/issues/76) | **closed 2026-11-08** (`NOT_PLANNED`) — re-homed to [carelink-api-research](https://github.com/NovaLux12/carelink-api-research); **not integrated** |

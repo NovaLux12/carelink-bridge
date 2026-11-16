@@ -10,8 +10,8 @@ This directory contains everything needed to run `carelink-bridge` as a long-liv
 | Node.js **22.12** or newer, at **`/usr/bin/node`** | `package.json` declares `engines.node: ">=22.12.0"` (puppeteer-core@25 is a runtime dependency). The shipped unit hardcodes `ExecStart=/usr/bin/node`, so an nvm install at `~/.nvm/…` fails with `status=203/EXEC` — see [Login](#login-npm-run-login) |
 | git | To clone the repo |
 | `loginctl enable-linger $USER` | So the service survives your logout |
-| Outbound HTTPS to `carelink.minimed.{eu,com}` | CareLink OAuth, discovery and the `/patient/*` metadata endpoints |
-| Outbound HTTPS to `clcloud.minimed.{eu,com}` | The data path — `baseUrlCumulus` from the discovery document resolves here, and the legacy `patient/connect/data` endpoints are served by this host too (v11/v12/v13 all live here) |
+| Outbound HTTPS to `carelink.minimed.{eu,com}` | CareLink OAuth (the Auth0 token endpoints) and the `/patient/*` metadata endpoints |
+| Outbound HTTPS to `clcloud.minimed.{eu,com}` | The discovery document (`/connect/carepartner/v13/discover/{pin}`) and the data path — `baseUrlCumulus` from that document resolves here, and the legacy `patient/connect/data` endpoints are served by this host too (v11/v12/v13 all live here) |
 | Outbound HTTPS to your Nightscout endpoint | Where the data lands |
 
 User-level systemd service (not system-wide) because:
@@ -108,9 +108,9 @@ on a systemd host.
 
 CareLink uses OAuth2 with a browser-based flow for the initial login. The bridge tries three strategies in order:
 
-1. **Automated** — POST credentials directly to Auth0. Works if you don't have CAPTCHA / MFA challenges.
-2. **Browser window** — opens Chrome/Edge/Chromium via Puppeteer, you log in manually, the bridge intercepts the OAuth redirect. Works for CAPTCHA / MFA.
-3. **Terminal paste fallback** — prints the Auth0 authorize URL, you open it in any browser, log in, copy the redirect URL with the `code=...` parameter, paste it back.
+1. **Automated** — POST credentials directly to Auth0. **Known broken since 2026-11-14 and cannot work for anyone**: Auth0's Universal Login page is JavaScript-rendered with no `<form>` element, so there is nothing to scrape and nowhere to POST. The bridge logs the failure and falls through. See [ARCHITECTURE](../docs/ARCHITECTURE.md#strategy-1-is-broken-and-the-reason-is-structural-measured-2026-11-14).
+2. **Browser window** — opens Chrome/Edge/Chromium via Puppeteer, you log in manually, the bridge intercepts the OAuth redirect. The normal path on a desktop; handles CAPTCHA / MFA.
+3. **Terminal paste fallback** — prints the Auth0 authorize URL, you open it in any browser, log in, copy the redirect URL with the `code=...` parameter, paste it back. The normal path on a headless host.
 
 Run `npm run login` from `~/carelink-bridge` — **not** from `deploy/`. There is
 no `package.json` in `deploy/`, so the command does not exist there. (This page
@@ -376,10 +376,10 @@ The bridge is a network client, not a server, so `RestrictAddressFamilies` is fi
 - **`logindata.json` contains OAuth tokens with full CareLink account access.** The systemd unit confines write access to the bridge directory (a per-file grant breaks token-file rotation — see issue #16). Treat it like a password.
 - **`.env` contains your CareLink password AND Nightscout API secret.** Same handling.
 - **The service makes outbound HTTPS to two host families**: CareLink
-  (`carelink.minimed.{eu,com}` — OAuth, discovery, `/patient/*` metadata)
-  and the data plane (`clcloud.minimed.{eu,com}` — the `baseUrlCumulus`
-  target for `display/message`, plus the legacy `connect/data` endpoints),
-  and to your Nightscout. There is no inbound listener unless you opt in:
+  (`carelink.minimed.{eu,com}` — OAuth and `/patient/*` metadata) and the
+  data plane (`clcloud.minimed.{eu,com}` — the discovery document, the
+  `baseUrlCumulus` target for `display/message`, plus the legacy
+  `connect/data` endpoints), and to your Nightscout. There is no inbound listener unless you opt in:
   `CARELINK_METRICS_PORT=0` (the default) opens no port at all, and a
   non-zero value binds the observability server to loopback only.
 - **The bridge is not FDA-approved** and may violate Medtronic's Terms of Service. Using it is at your own risk. See `SECURITY.md` for the full threat model.

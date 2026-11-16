@@ -47,13 +47,15 @@ Four things to know before you run either:
 - **It needs `hurl` and `jq`.** A missing tool makes the suite exit non-zero,
   which is *not* the same as drift. `npm run drift:check` separates the two and
   exits 2 with install hints.
-- **It sends live traffic to Medtronic's production servers** — about 106
-  requests across **nine** hosts, two seconds apart. The four `.hurl` suites
+- **It sends live traffic to Medtronic's production servers** — 109 requests
+  across **twelve** hosts, two seconds apart. The four `.hurl` suites
   carry 96 (GET, POST and `OPTIONS` method-probes); the
-  `05-public-config.check.sh` harness adds 10 `curl` calls, and its three hosts
-  are a subset of the nine. Exactly two `.hurl` requests are POSTs —
-  `/oauth/device/code` and `/oauth/revoke` in `04-deep-surface.hurl`, both
-  expected to be refused; everything else is a read or a method-probe, not a
+  `05-public-config.check.sh` harness adds 13 `curl` calls (ten call sites, three
+  of them inside two-iteration loops), and the hosts it touches —
+  `carelink.medtronic.eu`, `carelinkhp.minimed.eu`, `carelink-support.medtronic.eu`
+  — are the three not already in the `.hurl` set. Exactly two `.hurl` requests
+  are POSTs — `/oauth/device/code` and `/oauth/revoke` in `04-deep-surface.hurl`,
+  both expected to be refused; everything else is a read or a method-probe, not a
   write. That is the research repo's deliberate probing budget; running it
   repeatedly is not free politeness.
 - **A network failure is not drift.** The suite needs live round trips, and a

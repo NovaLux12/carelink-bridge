@@ -188,7 +188,7 @@ For every release:
    would make the tag the published record of it.
 
    Two things to know before you run it. It **sends live traffic to
-   Medtronic's production servers** — around 60 requests across nine
+   Medtronic's production servers** — 109 requests across twelve
    hosts, two seconds apart, read-only apart from two pinned POSTs. That
    is the research repo's deliberate probing budget, and running it more
    than once per release is not free politeness. And it needs a network

@@ -1059,8 +1059,9 @@ third-party client, or on the 2026-10-09 re-probe, and those are labelled
   completeness, decodes and reports the login token's validity/expiry,
   and confirms CareLink and Nightscout are reachable with an accepted
   `API_SECRET`, without fetching pump data. One request each to two hosts,
-  safe to run repeatedly. Exit code is non-zero on failure so it can gate a
-  deploy. First item of the v0.2.0 operability set ([#8]). ([#28])
+  safe to run repeatedly. Exit code is non-zero for a `✗` check so it can gate
+  a deploy (a `!` warning row does not change it — corrected 2026-11-16 against
+  `doctorCli()`). First item of the v0.2.0 operability set ([#8]). ([#28])
 
 ### Changed
 
