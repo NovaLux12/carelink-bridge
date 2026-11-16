@@ -341,7 +341,10 @@ unit change was needed.
 of hosts, beyond the current `git clone` + systemd path.
 
 - [x] systemd unit example — shipped in v0.1.3
-- [ ] Single static binary (using `pkg` or `bun build`)
+- [ ] Single static binary (using `pkg` or `bun build`) — **partly unblocked and
+      started**: `npm run bundle` now produces a working single-file artefact
+      (see the section below and [ADR 0009](./docs/adr/0009-bundling-spike-results.md)).
+      What remains is the *static* half: the bundle still needs Node ≥ 22.12.
 - [x] **Dockerfile for the bridge** — ships in the repo (#61); `docker build -t carelink-bridge .`
       is the documented path in [deploy/README.md](./deploy/README.md)
 - [x] **Published image** — `ghcr.io/novalux12/carelink-bridge`, multi-arch
@@ -380,6 +383,11 @@ Still open: a bundle is not a static binary (it needs Node ≥ 22.12 for the
 `node:` builtins), so genuinely self-contained output needs a SEA. And Chromium
 is still not bundled — `puppeteer-core` never downloads a browser, so a host
 with no Chrome still uses Strategy 3's terminal paste.
+
+**The bundle itself now exists.** `npm run bundle` builds
+`dist-bundle/carelink-bridge.mjs` and then *executes* it, failing with a named
+cause on either trap above. It runs in CI on every push, so the artefact cannot
+rot silently. What is still missing is only the *static* packaging step.
 
 **Tracking:** [GitHub issue #11](https://github.com/NovaLux12/carelink-bridge/issues/11) (closed 2026-11-08, `NOT_PLANNED`)
 

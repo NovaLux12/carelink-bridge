@@ -9,12 +9,21 @@ import puppeteer from 'puppeteer-core';
 import qs from 'qs';
 import type { LoginData, Auth0SSOConfig, DiscoverResponse } from './types/carelink.js';
 import { writeLoginDataAtomic } from './carelink/token.js';
+import { siblingDataFile } from './data-paths.js';
 import { selectAuth0ConfigUrl } from './login-errors.js';
 import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
 import * as logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const LOGINDATA_FILE = path.join(__dirname, '..', 'logindata.json');
+
+/**
+ * Where `logindata.json` lives.
+ *
+ * Resolved through `siblingDataFile` so the compiled layout and the
+ * single-file bundle agree — see `src/data-paths.ts` for why the two need
+ * different arithmetic and what went wrong without it.
+ */
+export const LOGINDATA_FILE = siblingDataFile(import.meta.url, 'logindata.json');
 
 
 function toBase64Url(buf: Buffer): string {

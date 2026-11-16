@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import { loadLoginData, decodeTokenPayload } from './carelink/token.js';
 import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
+import { siblingDataFile } from './data-paths.js';
 import type { LoginData } from './types/carelink.js';
 
 /**
@@ -225,7 +226,11 @@ if (isMainModule) {
   dotenv.config();
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const loginDataPath = path.join(__dirname, '..', 'logindata.json');
+  // Same resolution login uses. This used to be a second copy of
+  // `path.join(__dirname, '..', 'logindata.json')`, which is how doctor and
+  // login could disagree about where the token lives — particularly in the
+  // single-file bundle, where `'..'` lands one directory above the bundle.
+  const loginDataPath = siblingDataFile(import.meta.url, 'logindata.json');
 
   const probe: Probe = async (url, headers) => {
     const resp = await axios.get(url, { headers, timeout: 15_000, validateStatus: () => true });
