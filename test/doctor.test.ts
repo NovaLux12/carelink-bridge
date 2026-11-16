@@ -4,6 +4,8 @@ import {
   checkLoginData,
   checkCareLink,
   checkNightscout,
+  checkRegion,
+  countryRegions,
   formatResults,
   type Probe,
 } from '../src/doctor.js';
@@ -229,5 +231,87 @@ describe('formatResults()', () => {
     expect(out).toContain('✓');
     expect(out).toContain('✗');
     expect(out).toContain('fine');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Region cross-check (issue #145's honest half).
+//
+// The discovery document's `supportedCountries` maps each country to the region
+// that serves it — 109 entries, unauthenticated, live-measured 2026-11-16. So
+// doctor CAN answer "is MMCONNECT_SERVER wrong for my country?" without a token,
+// which the issue assumed needed one. It still cannot answer for a specific
+// ACCOUNT (that needs /patient/users/me, which is 401 unauthenticated) and the
+// code says so rather than implying more.
+// ---------------------------------------------------------------------------
+
+/** The live document shape: a LIST of single-key objects. */
+const discoveryDoc = {
+  supportedCountries: [
+    { US: { region: 'US', isoCode: 'US', iso3Code: 'USA', flag: '🇺🇸' } },
+    { GB: { region: 'EU', isoCode: 'GB', iso3Code: 'GBR', flag: '🇬🇧' } },
+    { AU: { region: 'EU', isoCode: 'AU', iso3Code: 'AUS', flag: '🇦🇺' } },
+    { DE: { region: 'EU', isoCode: 'DE', iso3Code: 'DEU', flag: '🇩🇪' } },
+  ],
+};
+
+describe('countryRegions()', () => {
+  it('flattens the list-of-single-key-objects shape', () => {
+    const m = countryRegions(discoveryDoc);
+    expect(m.get('GB')).toBe('EU');
+    expect(m.get('US')).toBe('US');
+    expect(m.size).toBe(4);
+  });
+
+  it('returns an empty map rather than throwing on an unexpected shape', () => {
+    // A changed document shape is worth a warning, not a crashed pre-flight.
+    for (const bad of [undefined, null, {}, { supportedCountries: 'nope' }, { supportedCountries: [null, 3] }]) {
+      expect(countryRegions(bad).size).toBe(0);
+    }
+  });
+
+  it('upper-cases the country code so lowercase config still matches', () => {
+    expect(countryRegions(discoveryDoc).get('GB')).toBe('EU');
+  });
+});
+
+describe('checkRegion()', () => {
+  it('passes when the country maps to the configured region', () => {
+    const r = checkRegion(discoveryDoc, { MMCONNECT_SERVER: 'EU', MMCONNECT_COUNTRYCODE: 'gb' });
+    expect(r.status).toBe('ok');
+    expect(r.detail).toContain('GB');
+    expect(r.detail).toContain('EU');
+  });
+
+  it('FAILS when a GB account is pointed at the US host', () => {
+    // This is the misconfiguration the check exists for: the US host answers
+    // 200 for discovery, so no existing row would flag it, and the account then
+    // 401s in a way that reads like bad credentials.
+    const r = checkRegion(discoveryDoc, { MMCONNECT_SERVER: 'US', MMCONNECT_COUNTRYCODE: 'GB' });
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('GB is served by the EU region');
+    expect(r.detail).toContain('MMCONNECT_SERVER=EU');
+  });
+
+  it('defaults the country to gb, matching the client', () => {
+    const r = checkRegion(discoveryDoc, { MMCONNECT_SERVER: 'US' });
+    expect(r.status).toBe('fail');
+  });
+
+  it('defers to MMCONNECT_SERVERNAME, which names a host directly', () => {
+    const r = checkRegion(discoveryDoc, { MMCONNECT_SERVERNAME: 'carelink.example.test' });
+    expect(r.status).toBe('ok');
+    expect(r.detail).toContain('MMCONNECT_SERVERNAME');
+  });
+
+  it('warns, not fails, when the document carried no usable country list', () => {
+    const r = checkRegion({}, { MMCONNECT_SERVER: 'EU' });
+    expect(r.status).toBe('warn');
+  });
+
+  it('warns, not fails, for a country absent from supportedCountries', () => {
+    const r = checkRegion(discoveryDoc, { MMCONNECT_SERVER: 'EU', MMCONNECT_COUNTRYCODE: 'ZZ' });
+    expect(r.status).toBe('warn');
+    expect(r.detail).toContain('ZZ');
   });
 });
