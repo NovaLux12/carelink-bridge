@@ -50,6 +50,26 @@ run_in_image() {
 
 echo "== image: $IMAGE"
 
+# The image must already be built — this script verifies, it does not build.
+#
+# ⚠ Without this guard, a MISSING image produced a cascade of nine misleading
+# per-check failures ("doctor banner missing", "CMD entrypoint did not reach its
+# own config error", "image has no HEALTHCHECK") because every `docker run`
+# failed with exit 125. Each line blamed the bridge's code for something the
+# absent image had done, and the summary still printed a definitive FAILED
+# verdict. One clear error is worth more than nine wrong ones.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "verify-image: image '$IMAGE' does not exist locally." >&2
+  echo "  Build it first:  docker build -t $IMAGE ." >&2
+  echo "  (CI builds it in the preceding step; this script only verifies.)" >&2
+  exit 2
+fi
+
+# Exit 125 is docker's own "could not run the container" code. It can never mean
+# "the program inside failed", so any 125 is a harness fault, not a verdict on
+# the image — report it as such rather than letting each check absorb it.
+DOCKER_RUN_FAILURE=125
+
 # --- 1. dist/doctor.js ------------------------------------------------------
 out=$(run_in_image node dist/doctor.js); code=$?
 echo "--- node dist/doctor.js (exit $code)"
