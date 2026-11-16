@@ -1,11 +1,22 @@
 # carelink-bridge — multi-stage build, small runtime image (issue #61).
 #
-# Runtime needs only env vars + a mounted logindata.json (created externally
-# via `npm run login`); state.json is written next to it at runtime.
+# The runtime stage installs production dependencies only, so `tsx` is absent and
+# `npm run doctor` / `npm run login` (which invoke it) DO NOT WORK IN THIS IMAGE —
+# verified: `sh: 1: tsx: not found`. Use the compiled entrypoints instead:
 #
 #   docker build -t carelink-bridge .
 #   docker run -d --name carelink-bridge --env-file .env \
-#     -v "$PWD/logindata.json:/app/logindata.json:ro" carelink-bridge
+#     -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \
+#     carelink-bridge
+#   docker cp logindata.json carelink-bridge:/app/logindata.json
+#   docker restart carelink-bridge
+#
+# ⚠ Do NOT bind-mount logindata.json, with or without :ro. Token refresh writes
+# a temp file and renames it over the destination, and rename onto a bind-mounted
+# FILE fails with EBUSY either way — after which every fetch fails with a bare
+# errno and the container never re-logins. Measured, not theorised. The `docker
+# cp` above is the write path that works; `docker exec carelink-bridge npm run
+# doctor:dist` is the pre-flight (the compiled form).
 #
 # The image enables the loopback-only observability server by default
 # (CARELINK_METRICS_PORT=8081) so the HEALTHCHECK can probe /healthz.
