@@ -90,7 +90,7 @@ jobs:
       # includes Raspberry Pi deployments, and an amd64-only image is useless
       # there. QEMU emulation makes this slow but it is a tag-time job only.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
