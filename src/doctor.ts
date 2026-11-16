@@ -166,10 +166,6 @@ export function checkCumulusTrack(document: unknown, region: string): CheckResul
   };
 }
 
-export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckResult> {
-  return (await probeDiscovery(probe, isUS)).result;
-}
-
 /**
  * Flatten the discovery document's `supportedCountries` into `CODE -> region`.
  *
