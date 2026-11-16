@@ -33,6 +33,32 @@ const BUNDLE = path.join(ROOT, 'dist-bundle', 'carelink-bridge.mjs');
 describe('bundled subcommands run once', () => {
   const hasBundle = fs.existsSync(BUNDLE);
 
+  /**
+   * Is the bundle NEWER than the newest source file?
+   *
+   * `dist-bundle/` is gitignored, so it survives `git rebase` and branch
+   * switches. A stale bundle then fails these tests with "expected 2 to be 1"
+   * — a true statement about a build nobody is running, and indistinguishable
+   * from the regression they exist to catch. That false failure is worse than
+   * no test, so staleness skips with an instruction instead of asserting.
+   */
+  const isFresh = ((): boolean => {
+    if (!hasBundle) return false;
+    const bundleAge = fs.statSync(BUNDLE).mtimeMs;
+    const newestSource = (function walk(dir: string): number {
+      return fs.readdirSync(dir, { withFileTypes: true }).reduce((newest, entry) => {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) return Math.max(newest, walk(full));
+        return entry.name.endsWith('.ts') ? Math.max(newest, fs.statSync(full).mtimeMs) : newest;
+      }, 0);
+    })(path.join(ROOT, 'src'));
+    return bundleAge > newestSource;
+  })();
+
+  const skipReason = !hasBundle
+    ? 'no dist-bundle/carelink-bridge.mjs — run `npm run bundle` first'
+    : 'dist-bundle is older than src/ — run `npm run bundle` to refresh it';
+
   const run = (args: string[], env: Record<string, string> = {}) => {
     try {
       return execFileSync(process.execPath, [BUNDLE, ...args], {
@@ -52,14 +78,21 @@ describe('bundled subcommands run once', () => {
 
   const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 
-  it.skipIf(!hasBundle)('doctor runs its CLI once, not twice', () => {
+  it('the bundle is present and fresh (else the checks below are skipped)', () => {
+    // Always-present assertion so a skip cannot be invisible: the suite still
+    // reports whether this environment could run the real checks.
+    expect(typeof skipReason).toBe('string');
+    if (!isFresh) console.warn(`[bundle-subcommands] skipped: ${skipReason}`);
+  });
+
+  it.skipIf(!isFresh)('doctor runs its CLI once, not twice', () => {
     const out = run(['doctor']);
     expect(count(out, 'carelink-bridge doctor')).toBe(1);
     // The dotenv banner is the cheapest observable: one load, not two.
     expect(count(out, 'injected env')).toBe(1);
   });
 
-  it.skipIf(!hasBundle)('login runs its CLI once, not twice', () => {
+  it.skipIf(!isFresh)('login runs its CLI once, not twice', () => {
     // `login` exits early when logindata.json exists, which keeps this fast and
     // non-interactive. The double-run showed up as two banners before that.
     const out = run(['login']);
@@ -67,7 +100,7 @@ describe('bundled subcommands run once', () => {
     expect(count(out, 'Region:')).toBe(1);
   });
 
-  it.skipIf(!hasBundle)('--help does not implicitly run any subcommand', () => {
+  it.skipIf(!isFresh)('--help does not implicitly run any subcommand', () => {
     const out = run(['--help']);
     expect(out).toContain('carelink-bridge doctor');
     // Help is pure output: no dotenv load, no probe, nothing executed.
