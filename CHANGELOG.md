@@ -12,6 +12,29 @@ record, not reconstructed.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The single-file bundle resolved its data files outside its own directory.**
+  Every module that needed `logindata.json` / `state.json` hardcoded how far up
+  the package root was — `'..'` from `dist/main.js`, `dist/login.js` and
+  `dist/doctor.js`, and `'..', '..'` from `dist/carelink/client.js`. All four
+  were right for compiled source and all four were wrong in the bundle, which
+  has no `dist/` at all. Measured: a bundle at
+  `/tmp/bundletest/carelink-bridge.mjs` looked for the token at
+  `/tmp/logindata.json` from login and **`/logindata.json`** from the API client
+  — the filesystem root — so a bundled deployment could authenticate and then
+  fail every fetch as though it had no token. Resolution now goes through
+  `src/data-paths.ts`, which takes the bundle case from a build-time define
+  (`__CARELINK_BUNDLED__`) and otherwise walks to the nearest `package.json`.
+  A structural test scans `src/` so a fifth hand-rolled path cannot reappear.
+
+### Added
+
+- **`npm run bundle`** — builds `dist-bundle/carelink-bridge.mjs` (2.9 MB, with
+  `puppeteer-core` inlined) and then *executes* it, failing with a named cause
+  on either bundling trap recorded in ADR 0009. It runs in CI, so the artefact
+  cannot rot silently. See [ADR 0009](./docs/adr/0009-bundling-spike-results.md).
+
 ### Research
 
 - **The single-binary blocker was false.** `puppeteer-core` does survive
@@ -22,6 +45,10 @@ record, not reconstructed.
   [ADR 0009](./docs/adr/0009-bundling-spike-results.md) with the two traps —
   ESM needs a `createRequire` banner, and the banner name must be namespaced or
   it collides with puppeteer's own in the inlined build. Issue #143.
+- **The payload census now asks about the scalar BG targets**
+  (`bgHighLimit` / `bgLowLimit`), so validation day answers the cheap half of
+  #148 for free. They are distinct from the `limits[]` schedule the issue is
+  blocked on, and a test pins that they are not conflated.
 
 ## [0.4.2] — 2026-11-15
 
