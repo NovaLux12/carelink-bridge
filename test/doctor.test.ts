@@ -2,10 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   checkConfig,
   checkLoginData,
-  checkCareLink,
+  probeDiscovery,
   checkNightscout,
   checkRegion,
   checkCumulusTrack,
+  runDoctor,
   countryRegions,
   formatResults,
   type Probe,
@@ -64,25 +65,28 @@ describe('checkLoginData()', () => {
   });
 });
 
-describe('checkCareLink()', () => {
-  it('passes on a 200 from the discovery endpoint', async () => {
-    const probe: Probe = vi.fn(async () => ({ status: 200, data: {} }));
-    const r = await checkCareLink(probe, false);
-    expect(r.status).toBe('ok');
+describe('probeDiscovery()', () => {
+  it('passes on a 200 from the discovery endpoint and returns the document', async () => {
+    const doc = { CP: [] };
+    const probe: Probe = vi.fn(async () => ({ status: 200, data: doc }));
+    const { result, document } = await probeDiscovery(probe, false);
+    expect(result.status).toBe('ok');
+    expect(document).toBe(doc);
     expect(probe).toHaveBeenCalledWith(expect.stringContaining('clcloud.minimed.eu'));
   });
 
   it('uses the US host when isUS is true', async () => {
     const probe: Probe = vi.fn(async () => ({ status: 200, data: {} }));
-    await checkCareLink(probe, true);
+    await probeDiscovery(probe, true);
     expect(probe).toHaveBeenCalledWith(expect.stringContaining('clcloud.minimed.com'));
   });
 
-  it('fails on a network error', async () => {
+  it('fails on a network error and returns no document', async () => {
     const probe: Probe = vi.fn(async () => { throw new Error('ENOTFOUND'); });
-    const r = await checkCareLink(probe, false);
-    expect(r.status).toBe('fail');
-    expect(r.detail).toContain('ENOTFOUND');
+    const { result, document } = await probeDiscovery(probe, false);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('ENOTFOUND');
+    expect(document).toBeUndefined();
   });
 
   // Regression for issue #145: the URL used to be a hardcoded
@@ -91,17 +95,17 @@ describe('checkCareLink()', () => {
   // probe URL against buildDiscoveryUrl() makes that drift a test failure.
   it('probes the same discovery URL login builds, not a hardcoded pin', async () => {
     const probe: Probe = vi.fn(async () => ({ status: 200, data: {} }));
-    await checkCareLink(probe, false);
+    await probeDiscovery(probe, false);
     expect((probe as any).mock.calls[0][0]).toBe(buildDiscoveryUrl(false));
 
-    await checkCareLink(probe, true);
+    await probeDiscovery(probe, true);
     expect((probe as any).mock.calls[1][0]).toBe(buildDiscoveryUrl(true));
   });
 
   it('names the pin it probed, so a moved pin is visible in the output', async () => {
     const probe: Probe = vi.fn(async () => ({ status: 200, data: {} }));
-    const r = await checkCareLink(probe, false);
-    expect(r.detail).toContain(DISCOVERY_APP_VERSION);
+    const { result } = await probeDiscovery(probe, false);
+    expect(result.detail).toContain(DISCOVERY_APP_VERSION);
   });
 });
 
@@ -368,5 +372,82 @@ describe('checkCumulusTrack()', () => {
     for (const bad of [{}, null, undefined, { CP: 'nope' }]) {
       expect(checkCumulusTrack(bad, 'EU').status).toBe('warn');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDoctor() — the assembly itself.
+//
+// Every check function above was tested individually, but nothing tested the
+// report an operator actually reads: which rows appear, in what order, and which
+// rows are correctly ABSENT when the document never arrived. That is where a
+// silent regression hides — a check can be perfect and still not be wired in.
+// ---------------------------------------------------------------------------
+describe('runDoctor()', () => {
+  const goodDoc = {
+    CP: [{ region: 'EU', baseUrlCumulus: 'https://clcloud.minimed.eu/connect/carepartner/v13' }],
+    supportedCountries: [{ GB: { region: 'EU', isoCode: 'GB' } }],
+  };
+
+  /** Probe that answers the discovery, status.json and verifyauth endpoints. */
+  function healthyProbe(): Probe {
+    return vi.fn(async (url: string) => {
+      if (url.includes('discover')) return { status: 200, data: goodDoc };
+      if (url.includes('status.json')) return { status: 200, data: {} };
+      if (url.includes('verifyauth')) return { status: 200, data: { message: { message: 'OK' } } };
+      throw new Error('unexpected ' + url);
+    }) as unknown as Probe;
+  }
+
+  const env = () => ({
+    CARELINK_USERNAME: 'u', CARELINK_PASSWORD: 'p', API_SECRET: 's',
+    NS: 'https://ns.example.com', MMCONNECT_COUNTRYCODE: 'GB',
+  });
+
+  it('emits every row in a stable order on a healthy setup', async () => {
+    const results = await runDoctor({ env: env(), loginDataPath: '/nonexistent', probe: healthyProbe() });
+    expect(results.map(r => r.name)).toEqual([
+      'Config (.env)',
+      'CareLink login (logindata.json)',
+      'CareLink reachable',
+      'CareLink region',
+      'CareLink cumulus track',
+      'Nightscout reachable',
+      'Nightscout API secret',
+    ]);
+    // Only the missing token is a warning; everything else must be ok.
+    expect(results.filter(r => r.status !== 'ok').map(r => r.name))
+      .toEqual(['CareLink login (logindata.json)']);
+  });
+
+  it('OMITS the region and track rows when discovery never answered', async () => {
+    // Two extra ✗ for the same root cause would be noise, and the region/track
+    // rows have nothing to read. The reachability row already says why.
+    const probe = vi.fn(async () => { throw new Error('ENOTFOUND'); }) as unknown as Probe;
+    const results = await runDoctor({ env: env(), loginDataPath: '/nonexistent', probe });
+    const names = results.map(r => r.name);
+    expect(names).toContain('CareLink reachable');
+    expect(names).not.toContain('CareLink region');
+    expect(names).not.toContain('CareLink cumulus track');
+    expect(results.find(r => r.name === 'CareLink reachable')?.status).toBe('fail');
+  });
+
+  it('surfaces an off-track pin and a region mismatch together', async () => {
+    // Both are visible on the same document, so a mis-pinned US account should
+    // produce both rows rather than one masking the other.
+    const badDoc = {
+      CP: [{ region: 'US', baseUrlCumulus: 'https://clcloud.minimed.com/connect/carepartner/v11' }],
+      supportedCountries: [{ GB: { region: 'EU', isoCode: 'GB' } }],
+    };
+    const probe = vi.fn(async (url: string) => {
+      if (url.includes('discover')) return { status: 200, data: badDoc };
+      if (url.includes('status.json')) return { status: 200, data: {} };
+      return { status: 200, data: { message: { message: 'OK' } } };
+    }) as unknown as Probe;
+    const results = await runDoctor({
+      env: { ...env(), MMCONNECT_SERVER: 'US' }, loginDataPath: '/nonexistent', probe,
+    });
+    expect(results.find(r => r.name === 'CareLink region')?.status).toBe('fail');
+    expect(results.find(r => r.name === 'CareLink cumulus track')?.status).toBe('fail');
   });
 });
