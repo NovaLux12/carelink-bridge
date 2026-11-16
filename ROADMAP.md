@@ -374,6 +374,18 @@ of hosts, beyond the current `git clone` + systemd path.
       `tsx`, `dist/main.js` reaches config validation, and `/healthz` answers
       on the port the `HEALTHCHECK` probes).
 - [ ] Home Assistant add-on (low priority)
+      — **packaged 2026-11-16, untested.** `repository.yaml` plus
+      `carelink_bridge/` (config.yaml, Dockerfile, DOCS.md) implement
+      [#144](https://github.com/NovaLux12/carelink-bridge/issues/144) as a
+      convenience path for HA OS / Supervised users. **Not for plain Home
+      Assistant Container installs** — those have no Supervisor and cannot run
+      apps at all; `deploy/README.md`'s Docker path is the right one there.
+      Labelled `stage: experimental` because no Supervisor was available to test
+      against: verified is that the YAML parses, the image builds, and the
+      entrypoint handles the `logindata.json` and `/data` problems; **unverified**
+      is that the Supervisor accepts, builds and starts it. See
+      [ADR 0010](./docs/adr/0010-home-assistant-add-on-is-packaging-only.md).
+      Remains unticked: an untested app is not a shipped one.
 
 **What unblocks the single-binary work:** ~~confirming `puppeteer-core` (login
 Strategy 2) works under the chosen bundler~~ — **answered 2026-11-15.** It does.

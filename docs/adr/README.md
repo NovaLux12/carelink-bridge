@@ -58,6 +58,7 @@ example.
 | [0008](./0008-branch-protection-enforce-admins.md) | Branch protection with `enforce_admins` | Accepted |
 | [0009](./0009-bundling-spike-results.md) | Bundling spike: esbuild produces a runnable single file | **Spike result** — enables a decision, does not make one |
 | [0010](./0010-node-sea-spike.md) | Node SEA spike: real single executable, but only on Node ≥ 25.5 | **Spike result** — enables a decision, does not make one |
+| [0011](./0011-home-assistant-add-on-is-packaging-only.md) | Home Assistant app is packaging only, and untested | Accepted |
 
 ## How to add a new ADR
 

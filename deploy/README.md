@@ -224,6 +224,14 @@ The repo root ships a multi-stage `Dockerfile` (`node:22-bookworm-slim`,
 small runtime image, runs as `USER node`). The bridge is also wired in as
 a sibling service in `deploy/nightscout-docker-compose.yml`.
 
+> **This is the right path for a Home Assistant Container install.** Home
+> Assistant *apps* need the Supervisor, which exists only on HA OS or a
+> Supervised install — a plain `homeassistant/home-assistant` container cannot
+> run them. The app in `carelink_bridge/` exists for HA OS / Supervised users
+> only, and is `experimental`: it has never been installed against a real
+> Supervisor. See [ADR 0010](../docs/adr/0010-home-assistant-add-on-is-packaging-only.md)
+> and `carelink_bridge/DOCS.md`. Nothing below changes.
+
 **Inside the image, use the `:dist` scripts.** The runtime stage runs
 `npm ci --omit=dev`, and `npm run doctor` / `npm run login` are `tsx …` with
 `tsx` a devDependency — so inside the container they fail with
