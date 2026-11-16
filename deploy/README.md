@@ -165,6 +165,15 @@ the row beneath it is the one that decides whether the secret is right.
 (Before 2026-11-15 doctor probed status.json unauthenticated, called that
 healthy server `✗ unreachable`, and returned before ever checking the secret.)
 
+**`CareLink region` is worth reading carefully.** It cross-checks your country
+against the region `MMCONNECT_SERVER` selects, using the discovery document's
+unauthenticated `supportedCountries` table. A `✗` here means the host you are
+pointing at does not serve your country — the endpoint will still answer `200`,
+so nothing else in the output would have told you, and the account itself would
+then fail in a way that looks like a bad password. The country comes from
+`MMCONNECT_COUNTRYCODE` and defaults to `gb`. Set `MMCONNECT_SERVERNAME` to name
+a host directly and the row reports `ok` with the switch marked irrelevant.
+
 It also reports which discovery pin it probed: the URL is built from
 `DISCOVERY_APP_VERSION` via `buildDiscoveryUrl()`, the same call login uses, so
 moving the pin moves both. (Before 2026-11-15 it hardcoded `android/3.6`, so a

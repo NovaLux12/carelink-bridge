@@ -30,6 +30,15 @@ record, not reconstructed.
 
 ### Added
 
+- **`doctor` cross-checks your region.** A new `CareLink region` row compares
+  the country (`MMCONNECT_COUNTRYCODE`, default `gb`) against the region
+  `MMCONNECT_SERVER` selects, using the discovery document's unauthenticated
+  `supportedCountries` table — no extra request, since it is the document the
+  reachability check already fetched. This catches the misconfiguration nothing
+  else could: a GB account pointed at the US host gets a `200` from discovery,
+  so every existing row stayed green, and the account then failed in a way that
+  read like a bad password. Costs nothing when correct, `✗` + exit 1 when not.
+  An unreadable or unknown country is a `warn`, never a `fail`.
 - **`npm run bundle`** — builds `dist-bundle/carelink-bridge.mjs` (3.0 MB, with
   `puppeteer-core` inlined) and then *executes* it, failing with a named cause
   on either bundling trap recorded in ADR 0009. The artefact carries the same
