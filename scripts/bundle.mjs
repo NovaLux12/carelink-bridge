@@ -63,6 +63,12 @@ async function main() {
     // puppeteer survives this. Marking it external would make the artefact need
     // node_modules and would answer the wrong question.
     banner: { js: CREATE_REQUIRE_BANNER },
+    // Tells `siblingDataFile` that this build has no `dist/` directory above
+    // it, so `logindata.json` / `state.json` belong beside the .mjs rather than
+    // at a package root. A runtime guess cannot distinguish "bundle dropped in
+    // some directory" from "compiled source inside dist/", so this is decided
+    // at build time (src/data-paths.ts explains why it matters).
+    define: { __CARELINK_BUNDLED__: 'true' },
     // ESM output with a bundled CJS dependency cannot use `import.meta.url`
     // replacements that esbuild would otherwise leave to the runtime; the
     // banner handles it. Keep the source map so a stack trace in a user's issue
