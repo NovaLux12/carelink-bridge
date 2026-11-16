@@ -43,6 +43,13 @@ jobs:
       # only `npm run build` proves dist/ exists and that the Dockerfile and
       # systemd unit have something to execute.
       - run: npm run build
+      # The single-file bundle (issue #143, ADR 0009). Only `npm run bundle`
+      # proves the artefact a user would actually run loads: it rebuilds with
+      # puppeteer inlined and then EXECUTES the output, failing on the two
+      # traps that produce a bundle which builds cleanly and dies at startup
+      # (a missing createRequire banner, and a colliding one). tsc cannot see
+      # either, which is why this is a separate step rather than part of build.
+      - run: npm run bundle
       # Version drift guard. CONTRIBUTING step 1 (bump package.json, then
       # `npm install --package-lock-only`) is load-bearing and unguarded: `npm ci`
       # catches DEPENDENCY drift, not the package's own version, so a bump that
