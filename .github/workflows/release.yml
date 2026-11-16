@@ -5,10 +5,11 @@ name: Release
 # `branches: [main]` only, so tagging ran no workflow at all: the release object
 # was a hand-typed string pointing at a commit nothing re-verified.
 #
-# This does not build or publish an artefact — there is no npm package (the
-# manifest is `private`) and no image is published. It verifies the release and
-# creates it, which is where every historical version failed: v0.3.0 was marked
-# shipped with a date while no tag existed and `package.json` still read 0.2.0.
+# This does not build or publish an artefact — docker.yml publishes the image,
+# and there is no npm package (the manifest is `private`). What this does is
+# verify the release and create it, which is where every historical version
+# failed: v0.3.0 was marked shipped with a date while no tag existed and
+# `package.json` still read 0.2.0.
 
 on:
   push:
@@ -46,14 +47,10 @@ jobs:
           fi
 
       # The one check that would have caught every historical drift.
-      - name: package.json version matches the tag
+      - name: package.json, package-lock.json and the tag all agree
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG=$(node -p "require('./package.json').version")
-          LOCK=$(node -p "require('./package-lock.json').version")
-          echo "tag=$TAG package.json=$PKG package-lock.json=$LOCK"
-          [ "$TAG" = "$PKG" ] || { echo "::error::tag $TAG != package.json $PKG"; exit 1; }
-          [ "$TAG" = "$LOCK" ] || { echo "::error::tag $TAG != package-lock.json $LOCK (run: npm install --package-lock-only)"; exit 1; }
+          echo "tag=${GITHUB_REF_NAME#v}"
+          node scripts/check-version-sync.mjs --tag "$GITHUB_REF_NAME"
 
       # A release must be cut from something that actually landed. Tagging a
       # side branch publishes a commit no PR ever reviewed.
@@ -88,6 +85,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The artefact this tag claims to ship. `npm run build` exiting 0 does not
+      # prove dist/ holds the entrypoints the Dockerfile and systemd unit
+      # execute — measured 2026-11-16, three entrypoints can be missing and
+      # every other step stays green.
+      - name: dist/ contains the entrypoints the tag ships
+        run: node scripts/verify-dist.mjs
 
       # --- Publish ---------------------------------------------------------
 

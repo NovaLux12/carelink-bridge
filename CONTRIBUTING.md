@@ -92,18 +92,25 @@ required CI checks (the job was renamed from `test` to `ci` in
 the required contexts follow the job name).
 
 ⚠ **The required contexts and the CI matrix are a pair that drifts.** They are
-`ci (22)`, `ci (24)` and `cross-links`, matching the `[22, 24]` matrix and the
-`cross-links` job — verified against the live branch-protection config
-2026-11-15. This is recorded because it *had* drifted: until 2026-11-14 the
-required contexts were `ci (20)` and `ci (22)` while the matrix was `[22, 24]`
-(Node 20 was dropped when the floor moved to 22.12, ADR 0007), so `ci (20)`
-never reported and `ci (24)` did not gate merges — a PR could sit blocked on a
-check that could not run. Whenever the matrix or the job list changes, update
-the required contexts in repository settings in the same change, or the
-protection silently stops covering the new legs. Note that `enforce_admins` is
-on, so even the maintainer cannot push directly. See
+`ci (22)`, `ci (24)`, `cross-links` and — since 2026-11-16 — `image`, matching
+the `[22, 24]` matrix plus the `macos`, `image` and `cross-links` jobs. Verified
+against the live branch-protection config 2026-11-15 for the first three. This
+is recorded because it *had* drifted: until 2026-11-14 the required contexts
+were `ci (20)` and `ci (22)` while the matrix was `[22, 24]` (Node 20 was
+dropped when the floor moved to 22.12, ADR 0007), so `ci (20)` never reported
+and `ci (24)` did not gate merges — a PR could sit blocked on a check that could
+not run. Whenever the matrix or the job list changes, update the required
+contexts in repository settings in the same change, or the protection silently
+stops covering the new legs. Note that `enforce_admins` is on, so even the
+maintainer cannot push directly. See
 [ADR 0008](./docs/adr/0008-branch-protection-enforce-admins.md) for the
 rationale.
+
+**`image` is new and is not yet a required context** (added 2026-11-16, in the
+same change that added the job). Until it is added to the branch-protection
+config it runs and can fail, but a red `image` does not block a merge. It has
+to be added by a maintainer with admin rights on the repo settings — it cannot
+be changed from a PR.
 
 ## Testing with real CareLink data
 
