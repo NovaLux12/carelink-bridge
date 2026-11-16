@@ -9,7 +9,7 @@ import puppeteer from 'puppeteer-core';
 import qs from 'qs';
 import type { LoginData, Auth0SSOConfig, DiscoverResponse } from './types/carelink.js';
 import { writeLoginDataAtomic } from './carelink/token.js';
-import { siblingDataFile } from './data-paths.js';
+import { siblingDataFile, isBundledBuild } from './data-paths.js';
 import { selectAuth0ConfigUrl } from './login-errors.js';
 import { DISCOVERY_APP_VERSION, buildDiscoveryUrl } from './discovery.js';
 import * as logger from './logger.js';
@@ -535,7 +535,16 @@ export async function login(isUS: boolean, username?: string, password?: string)
 // ---------------------------------------------------------------------------
 // Standalone CLI mode
 // ---------------------------------------------------------------------------
-const isMainModule = process.argv[1] &&
+/**
+ * Should this module self-execute its CLI?
+ *
+ * ⚠ FALSE IN THE BUNDLE, always — see the identical note in `doctor.ts`. A
+ * bundle is one file, so `import.meta.url` equals `process.argv[1]` and this is
+ * true for every bundled CLI module simultaneously. Left unguarded, `login`
+ * runs twice in the bundle, which for an INTERACTIVE prompt means the user is
+ * asked to paste the OAuth redirect URL a second time.
+ */
+const isMainModule = !isBundledBuild() && process.argv[1] &&
   (path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url).replace(/\.ts$/, '.js')));
 
