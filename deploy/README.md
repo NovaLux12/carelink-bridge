@@ -274,8 +274,8 @@ npm run login           # host only; writes ~/carelink-bridge/logindata.json
 # 2a. Standalone container. Persist state in a volume (see below).
 #     Either pull the published image (multi-arch: amd64 + arm64, so this works
 #     on a Raspberry Pi). Pin a version rather than `latest` if the deployment
-#     matters to you: `latest` follows the newest tag, but a manual workflow
-#     dispatch also overwrites it with an unversioned build of `main`.…
+#     matters to you: `latest` is only ever minted by a release tag, so it does
+#     not move on a manual rebuild, but it does move when the next release is cut.
 docker pull ghcr.io/novalux12/carelink-bridge:0.4.2
 docker run -d --name carelink-bridge --env-file .env \
   -e CARELINK_STATE_FILE=/data/state.json -v carelink-data:/data \

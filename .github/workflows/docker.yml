@@ -13,6 +13,14 @@ name: Docker
 #   - manual dispatch, for a one-off rebuild without bumping a version
 # Deliberately NOT on every push to main: that would publish `edge` images
 # nobody asked for and burn Actions minutes on an artefact with no consumer.
+#
+# INVARIANT: `latest` means "the newest released version", never "the newest
+# build". It is produced only by a tag push of a non-prerelease version. A
+# manual dispatch publishes a `sha-<commit>` tag and nothing else. This is
+# enforced twice — in the `tags:` block below (what is asked for) and by the
+# smoke job's assertion (what actually landed) — because the failure is silent:
+# a dispatch that repointed `latest` at an unversioned build of main looked
+# exactly like a healthy run in the Actions UI.
 
 on:
   push:
@@ -39,8 +47,44 @@ jobs:
     # broken entrypoint) are architecture-independent and belong at PR time.
     # If you change the Dockerfile's runtime stage, the `image` job is what will
     # tell you whether the image still works before this job publishes it.
+    outputs:
+      # The primary tag (`0.4.2` on a tag push, `sha-1b8fc40` on a dispatch).
+      # The smoke job pulls exactly this, so what it verifies is the artefact
+      # that was published rather than a second local build that might differ.
+      version: ${{ steps.meta.outputs.version }}
+      image: ${{ steps.image.outputs.name }}
+      # What `:latest` pointed at BEFORE this build. The smoke job compares it
+      # to what `:latest` points at afterwards; that comparison is the only
+      # way to tell "I left it alone" from "I moved it", because a dispatch of
+      # the very commit a release was cut from produces the same image and
+      # would otherwise look identical either way.
+      latest_before: ${{ steps.before.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
+
+      # Fail before building, not after. release.yml runs in PARALLEL with this
+      # workflow and checks the same thing, so without this guard a tag pushed
+      # against a stale package.json published a mislabelled image (tags
+      # 0.5.0/0.5/0/latest over a tree that says 0.4.2) seconds before the
+      # release workflow failed — the bad image is already on the registry, and
+      # `latest` has already moved. This is the v0.1.1/v0.1.2 drift class
+      # (package.json said 0.1.0 while the tags said 0.1.1 and 0.1.2), and the
+      # only reason it cannot recur silently is that both workflows check it.
+      - name: package.json version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          LOCK=$(node -p "require('./package-lock.json').version")
+          echo "tag=$TAG package.json=$PKG package-lock.json=$LOCK"
+          [ "$TAG" = "$PKG" ] || {
+            echo "::error::tag $TAG != package.json $PKG — the image would be published as $TAG while the code says $PKG. Bump package.json and 'npm install --package-lock-only' before tagging."
+            exit 1
+          }
+          [ "$TAG" = "$LOCK" ] || {
+            echo "::error::tag $TAG != package-lock.json $LOCK (run: npm install --package-lock-only)"
+            exit 1
+          }
 
       # arm64 matters more here than for most projects: the target audience
       # includes Raspberry Pi deployments, and an amd64-only image is useless
@@ -58,19 +102,58 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/carelink-bridge" >> "$GITHUB_OUTPUT"
+
+      # Snapshot `:latest` before the push, so the smoke job can tell whether
+      # this build moved it. A missing tag records the literal `none` rather
+      # than an empty string, which an unset output would be indistinguishable
+      # from.
+      - name: Record what :latest points at now
+        id: before
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          if docker manifest inspect "$IMAGE:latest" >/dev/null 2>&1; then
+            D=$(docker manifest inspect "$IMAGE:latest" | sha256sum | cut -d' ' -f1)
+          else
+            D=none
+          fi
+          echo "digest=$D" >> "$GITHUB_OUTPUT"
+          echo ":latest before this build: $D"
+
       # Tags derived from the git ref, not hand-written: `v0.4.1` yields
-      # 0.4.1, 0.4, latest. `latest` is suppressed for pre-release tags so a
+      # 0.4.1, 0.4, 0, latest. `latest` is suppressed for pre-release tags so a
       # -rc does not displace the stable image.
+      #
+      # Two separate things are needed for `latest` to mean "the current
+      # release", and leaving out either one breaks it:
+      #
+      #  1. `flavor: latest=false` turns OFF the automatic latest that
+      #     metadata-action adds to every `type=semver` entry on a tag. Without
+      #     it, `latest` is emitted by the semver entry regardless of what the
+      #     `raw` entry says — so the `raw` entry gating on a tag push could
+      #     never suppress it on a dispatch (dispatch has no semver entry, and
+      #     the raw entry was unconditional). Verified against metadata-action
+      #     v5.9.0's own Meta class: with the old block a dispatch emitted
+      #     `latest` from `type=raw` and a tag push emitted `latest` twice.
+      #  2. The `raw` entry re-adds `latest` ONLY on a tag push of a version
+      #     with no `-` in it. On a dispatch `github.ref_name` is a branch
+      #     (`main`), which contains no `-` — so the gate must test the event,
+      #     not just the ref name, or a dispatch on `main` would still win.
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/carelink-bridge
+          images: ${{ steps.image.outputs.name }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
             type=sha
 
       - name: Build and push
@@ -102,3 +185,189 @@ jobs:
             echo ""
             echo "Platforms: linux/amd64, linux/arm64"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Building an image is not evidence that it runs. Until this job existed
+  # nothing ever executed the published artefact: the Dockerfile has been
+  # green since #61 while its runtime stage was quietly missing `tsx`, so
+  # `npm run doctor` inside the image died with `sh: 1: tsx: not found` (#146)
+  # and no workflow noticed. What is checked here is the image PULLED BACK FROM
+  # THE REGISTRY, not a second local build, so a push that silently did not
+  # land cannot pass.
+  smoke:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the published image
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          # Fail loudly rather than smoke-testing `:latest` by accident: an
+          # empty version would make the pull below a no-op on a floating tag.
+          [ -n "$VERSION" ] || { echo "::error::no image version was produced by the metadata step"; exit 1; }
+          echo "pulling $IMAGE:$VERSION"
+          docker pull "$IMAGE:$VERSION"
+
+      # The single most load-bearing check. `doctor` is the entrypoint an
+      # operator runs before anything else, it is documented for the image, and
+      # it is the one that was broken by a devDependency the runtime stage
+      # never installs. Asserted on the exit code AND on the report itself —
+      # an exit code alone would pass for a crash.
+      - name: Published image runs doctor without tsx
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set +e
+          # --network none: doctor probes two live hosts, and this job must not
+          # depend on Medtronic's uptime or spend its probing budget. Offline it
+          # fails fast on DNS, which is exactly the shape we assert on.
+          OUT=$(docker run --rm --network none "$IMAGE:$VERSION" node dist/doctor.js 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          echo "exit=$RC"
+          echo "$OUT" | grep -q 'carelink-bridge doctor' \
+            || { echo "::error::dist/doctor.js did not start — the runtime image is missing the compiled entrypoint"; exit 1; }
+          echo "$OUT" | grep -q 'Config (.env)' \
+            || { echo "::error::doctor ran but printed no config check"; exit 1; }
+          echo "$OUT" | grep -qE "tsx: not found|Cannot find module|ERR_MODULE_NOT_FOUND" \
+            && { echo "::error::doctor failed to load a module — the runtime stage is missing a dependency"; exit 1; }
+          [ "$RC" = "1" ] \
+            || { echo "::error::doctor exited $RC; with no config it must exit 1 (0 would mean the checks did not run)"; exit 1; }
+          echo "doctor runs from dist/ in the published image"
+
+      # `main.js` is the CMD. It needs the runtime deps (axios, qs,
+      # puppeteer-core) to have been installed with --omit=dev. With no env it
+      # must die on config validation, not on a missing module.
+      - name: Published image can load the daemon entrypoint
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set +e
+          OUT=$(docker run --rm --network none "$IMAGE:$VERSION" node dist/main.js 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          echo "$RC"
+          [ "$RC" = "1" ] || { echo "::error::main.js exited $RC without config; expected 1 from config validation"; exit 1; }
+          echo "$OUT" | grep -q 'Missing CARELINK_USERNAME' \
+            || { echo "::error::main.js did not reach config validation — it failed earlier (missing module?)"; exit 1; }
+          echo "$OUT" | grep -qE "Cannot find module|ERR_MODULE_NOT_FOUND" \
+            && { echo "::error::main.js could not resolve a runtime dependency"; exit 1; }
+          echo "daemon entrypoint loads and validates config"
+
+      # The HEALTHCHECK is a one-liner in the Dockerfile that nothing runs in
+      # CI; a typo there makes every container report `unhealthy` forever. Run
+      # the container with placeholder config and assert the observability
+      # server answers on the port the healthcheck probes.
+      - name: HEALTHCHECK endpoint answers inside the container
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          NAME="cbsmoke-$RANDOM"
+          cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run -d --name "$NAME" \
+            -e CARELINK_USERNAME=smoke \
+            -e CARELINK_PASSWORD=smoke \
+            -e API_SECRET=smoke \
+            -e NS=https://nightscout.invalid \
+            -e CARELINK_STATE_FILE=/tmp/state.json \
+            "$IMAGE:$VERSION" >/dev/null
+
+          for _ in $(seq 1 30); do
+            if OUT=$(docker exec "$NAME" node -e "
+              const p = process.env.CARELINK_METRICS_PORT || '8081';
+              fetch('http://127.0.0.1:' + p + '/healthz')
+                .then(async r => { console.log(r.status + ' ' + (await r.text())); process.exit(0); })
+                .catch(e => { console.log('ERR ' + e.message); process.exit(1); });
+            " 2>&1); then
+              case "$OUT" in
+                503\ *|200\ *) break ;;
+              esac
+            fi
+            sleep 2
+          done
+          echo "healthz: $OUT"
+          docker logs "$NAME" 2>&1 | tail -15 || true
+
+          echo "$OUT" | grep -qE '^(503|200) ' \
+            || { echo "::error::/healthz did not answer with 503 or 200 inside the container — the HEALTHCHECK probe would report unhealthy"; exit 1; }
+          echo "$OUT" | grep -q 'liveness' \
+            || { echo "::error::/healthz answered but the body is not the expected JSON"; exit 1; }
+
+      # The last line of defence on the `latest` invariant. The tags block above
+      # states the intent; this reads the registry and checks what happened.
+      - name: latest points at this build only for a release tag
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          LATEST_BEFORE: ${{ needs.publish.outputs.latest_before }}
+        run: |
+          set -e
+          # Compare the registry's own manifest bytes rather than two tags'
+          # text: two tags resolving to the same multi-arch build return the
+          # same stored document, so a digest of it is equal exactly when the
+          # images are. `docker manifest inspect` (built into the CLI) is used
+          # instead of `buildx imagetools` so this needs no extra setup step.
+          digest() {
+            if ! docker manifest inspect "$IMAGE:$1" >/dev/null 2>&1; then
+              echo "::error::could not read manifest of $IMAGE:$1" >&2
+              return 1
+            fi
+            docker manifest inspect "$IMAGE:$1" | sha256sum | cut -d' ' -f1
+          }
+
+          # What kind of build is this? Derived from the REF, not from the
+          # version output: a version that disagreed with the tag would
+          # otherwise silently reclassify a release as a non-release and skip
+          # the assertion it needs. Disagreement is an error, not a downgrade.
+          IS_RELEASE=false
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && printf '%s' "$GITHUB_REF" | grep -q '^refs/tags/v'; then
+            EXPECTED="${GITHUB_REF_NAME#v}"
+            [ "$VERSION" = "$EXPECTED" ] \
+              || { echo "::error::metadata produced version '$VERSION' for tag '$GITHUB_REF_NAME' — expected '$EXPECTED'"; exit 1; }
+            if printf '%s' "$EXPECTED" | grep -q '-'; then
+              echo "pre-release tag: :latest must be left alone"
+            else
+              IS_RELEASE=true
+            fi
+          fi
+          echo "version=$VERSION ref=$GITHUB_REF_NAME event=$GITHUB_EVENT_NAME is_release=$IS_RELEASE"
+          echo "latest before this build: $LATEST_BEFORE"
+
+          LATEST_AFTER=none
+          if docker manifest inspect "$IMAGE:latest" >/dev/null 2>&1; then
+            LATEST_AFTER=$(digest latest)
+          fi
+          echo "latest after this build:  $LATEST_AFTER"
+
+          if [ "$IS_RELEASE" = "true" ]; then
+            # A release must own `latest`, and it must be this very build.
+            [ "$LATEST_AFTER" != "none" ] \
+              || { echo "::error::a release tag was pushed but :latest does not exist"; exit 1; }
+            THIS=$(digest "$VERSION")
+            echo "this build:                $THIS"
+            [ "$LATEST_AFTER" = "$THIS" ] \
+              || { echo "::error:::latest does not resolve to $VERSION — the registry is serving something other than this release"; exit 1; }
+            echo ":latest resolves to the release image"
+          else
+            # A non-release build must not move `latest` AT ALL. Comparing
+            # before/after is what makes this checkable: comparing `latest`
+            # to this build's own digest would pass a dispatch of a released
+            # commit by accident, and would fail one nothing else could.
+            [ "$LATEST_AFTER" = "$LATEST_BEFORE" ] \
+              || { echo "::error::a non-release build ($GITHUB_REF_NAME, $VERSION) moved :latest from $LATEST_BEFORE to $LATEST_AFTER — a manual dispatch must publish only sha-/version tags"; exit 1; }
+            echo ":latest was not touched ($LATEST_AFTER)"
+          fi

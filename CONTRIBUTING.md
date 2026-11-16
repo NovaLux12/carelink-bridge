@@ -200,15 +200,39 @@ For every release:
    the evidence, and only then proceed.
 4. Merge those changes via PR like any other.
 5. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-6. Cut the release: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."`
-   — the notes should match the CHANGELOG entry
-   (security-relevant changes get a clear callout per
-   [SECURITY.md](./SECURITY.md)).
+6. **Do not run `gh release create`.** The `Release` workflow
+   (`.github/workflows/release.yml`) runs on the tag push and creates the
+   GitHub release itself, taking the notes from the CHANGELOG section — so the
+   notes cannot disagree with the CHANGELOG. Running `gh release create` by
+   hand first makes that step fail on a release that already exists, and the
+   hand-typed notes are exactly what the workflow exists to prevent. Watch the
+   run instead: `gh run watch`.
 7. Check ROADMAP.md — a phase marked "shipped" must have
    a matching tag and release.
 8. If a new architectural decision was made in this
    release, the ADR should already exist in `docs/adr/`.
    Confirm the index table is up to date.
+
+**What is enforced by automation, and what is not.** This matters because the
+enforced items fail loudly and the unenforced ones fail silently, and the
+silent ones have caused every historical release defect.
+
+| Step | Enforced? | Where |
+|---|---|---|
+| package.json / package-lock version agree | yes | `ci.yml` ("versions agree") |
+| package.json version == the tag | yes | `release.yml` **and** `docker.yml` — a mismatch fails before any image is published |
+| Tag is `vX.Y.Z` | yes | `release.yml` |
+| Tag commit is an ancestor of `main` | yes | `release.yml` |
+| CHANGELOG has a non-empty `## [X.Y.Z]` section | yes | `release.yml` (literal match, so `## [0X4Y2]` cannot stand in for `0.4.2`) |
+| typecheck / test / build on the tagged commit | yes | `release.yml` |
+| The published image actually runs | yes | `docker.yml` smoke job (pulls back from the registry) |
+| `latest` means "current release" | yes | `docker.yml` — suppressed on dispatch, and asserted on the registry |
+| **`npm run drift:check` (step 3)** | **no** | nothing runs it. It needs a sibling clone of the research repo, `hurl` and `jq`, and it sends live traffic to Medtronic, so it is deliberately not in CI. **This is the one release step a machine cannot catch for you.** |
+| ROADMAP/ADR consistency (steps 7–8) | no | review only |
+
+Anything in the table marked "no" is a judgement call you are making, not a
+check that ran. If you skip step 3, say so in the release notes rather than
+leaving the next maintainer to assume it passed.
 
 ## What we won't accept
 

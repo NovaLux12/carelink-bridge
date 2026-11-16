@@ -64,19 +64,27 @@ jobs:
 
       # A CHANGELOG section for this version must exist. This is what stops a
       # release body being invented at publish time.
+      #
+      # Matching is by literal prefix, not by regex. The previous version
+      # interpolated the tag into a regex (`grep -qE "^## \[${TAG}\]"`), where
+      # `.` matches any character — so a section headed `## [0X4Y2]` satisfied
+      # the check for tag `0.4.2`, and the release body would then be extracted
+      # from a section belonging to a version that does not exist. Measured:
+      # the old check matched both files below; `index()` matches only the
+      # first.
       - name: CHANGELOG has a section for this version
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          if ! grep -qE "^## \[${TAG}\]" CHANGELOG.md; then
+          if ! grep -qF "## [$TAG]" CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no '## [$TAG]' section"
             exit 1
           fi
           # The section must not be empty prose.
           BODY=$(awk -v v="$TAG" '
-            $0 ~ "^## \\[" v "\\]" {f=1; next}
-            f && /^## \[/ {exit}
+            index($0, "## [" v "]") == 1 {f=1; next}
+            f && substr($0, 1, 4) == "## [" {exit}
             f {print}
-          ' CHANGELOG.md | grep -cvE '^\s*$' || true)
+          ' CHANGELOG.md | grep -cvE '^[[:space:]]*$' || true)
           if [ "$BODY" -lt 3 ]; then
             echo "::error::CHANGELOG section for $TAG has $BODY non-empty lines; write the entry before tagging"
             exit 1
@@ -97,9 +105,11 @@ jobs:
       - name: Extract the CHANGELOG section as release notes
         run: |
           TAG="${GITHUB_REF_NAME#v}"
+          # Literal prefix match, same reason as the check above: a regex here
+          # would let `## [0X4Y2]` stand in for `## [0.4.2]`.
           awk -v v="$TAG" '
-            $0 ~ "^## \\[" v "\\]" {f=1; next}
-            f && /^## \[/ {exit}
+            index($0, "## [" v "]") == 1 {f=1; next}
+            f && substr($0, 1, 4) == "## [" {exit}
             f {print}
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           wc -l "$RUNNER_TEMP/notes.md"

@@ -356,13 +356,20 @@ of hosts, beyond the current `git clone` + systemd path.
       `v0.4.2` is the first release with a genuinely versioned image; its tag
       push produced `0.4.2`, `0.4`, `0`, `latest` and `sha-1b8fc40`, all
       verified present on the registry for both architectures.
-      **Caveat worth knowing:** the workflow landed 22 minutes *after* `v0.4.1`
-      was tagged, so that version has no image, and the first build (a manual
-      dispatch of `main`) produced only `latest` and `sha-1cbff5d` — a dispatch
-      is not a tag event and generates no semver tag. Both are superseded now,
-      but the pattern recurs on every dispatch: **a manual rebuild replaces
-      `latest` with an unversioned build**, so pin a version or a `sha-` tag
-      anywhere it matters.
+      **`latest` now means "the newest released version", and only that.** A
+      manual dispatch publishes `sha-<commit>` and nothing else; it no longer
+      repoints `latest`, which it used to do silently (the first dispatch of
+      `main` produced only `latest` and `sha-1cbff5d`, and the workflow landed
+      22 minutes *after* `v0.4.1` was tagged, so that version has no image at
+      all). Enforced in two places: `flavor: latest=false` plus an
+      event-gated `raw` tag so only a non-prerelease tag push mints `latest`,
+      and a smoke job that reads the registry before and after the push and
+      fails if a non-release build moved it. Still pin a version in deployments
+      — `latest` follows tags, so it moves when the next release is cut.
+      Every published image is now pulled back from the registry and executed
+      before the job is green (the `smoke` job: `dist/doctor.js` runs without
+      `tsx`, `dist/main.js` reaches config validation, and `/healthz` answers
+      on the port the `HEALTHCHECK` probes).
 - [ ] Home Assistant add-on (low priority)
 
 **What unblocks the single-binary work:** ~~confirming `puppeteer-core` (login
