@@ -9,7 +9,7 @@ import {
   CUMULUS_V13_PATH_SUFFIX,
   VERIFIED_AUTH0_V13_FAMILY,
 } from './discovery.js';
-import { siblingDataFile } from './data-paths.js';
+import { siblingDataFile, isBundledBuild } from './data-paths.js';
 import type { LoginData } from './types/carelink.js';
 
 /**
@@ -390,7 +390,18 @@ export function formatResults(results: CheckResult[]): string {
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
-const isMainModule = process.argv[1] &&
+/**
+ * Should this module self-execute its CLI?
+ *
+ * ⚠ FALSE IN THE BUNDLE, always. A bundle is one file, so `import.meta.url`
+ * equals `process.argv[1]` and this comparison is true for EVERY bundled CLI
+ * module at once — which is why the bundle has an explicit dispatcher
+ * (`src/bundle-main.ts`). Without the `!isBundledBuild()` term the guard fires
+ * inside the bundle too, and doctor runs twice: once via the dispatcher, once
+ * via this block. The only visible symptom was a doubled "injected env" line,
+ * but the second run re-fetches discovery and re-runs every check.
+ */
+const isMainModule = !isBundledBuild() && process.argv[1] &&
   (path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url).replace(/\.ts$/, '.js')));
 
