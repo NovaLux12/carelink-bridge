@@ -13,6 +13,7 @@ import { buildDiscoveryUrl, DISCOVERY_APP_VERSION } from '../discovery.js';
 import { incTokenRefresh } from '../metrics.js';
 import { logPayloadCensus } from '../payload-census.js';
 import { assertUserInfoShape } from '../login-errors.js';
+import { siblingDataFile } from '../data-paths.js';
 import type { CareLinkData, CareLinkUserInfo, CareLinkPatientLink, CareLinkCountrySettings, DiscoverResponse } from '../types/carelink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,7 +61,12 @@ export class CareLinkClient {
       options.serverName || process.env['MMCONNECT_SERVERNAME'],
     );
     this.urls = buildUrls(this.serverName, countryCode, lang);
-    this.loginDataPath = path.join(__dirname, '..', '..', 'logindata.json');
+    // Resolved through the shared helper, which walks up to the package root
+    // rather than assuming a fixed number of levels. The hand-rolled
+    // `'..', '..'` here put the token at `/logindata.json` for a bundle in
+    // `/tmp/bundletest` — the filesystem root — which cannot be the file login
+    // wrote.
+    this.loginDataPath = siblingDataFile(import.meta.url, 'logindata.json');
     this.circuitBreaker = new CircuitBreaker(
       options.circuitThreshold ?? DEFAULT_CIRCUIT_THRESHOLD,
       options.circuitCooldownMs ?? DEFAULT_CIRCUIT_COOLDOWN_MS,
