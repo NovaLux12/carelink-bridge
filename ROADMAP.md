@@ -45,7 +45,7 @@ followed the same day, `v0.4.0`/`v0.4.1` on 2026-11-14, and `v0.4.2` on
 | v0.4.0 | ✅ | **v0.4.0** (2026-11-14) | **Reused number.** Originally reserved for observability, which shipped inside v0.3.0. Reassigned 2026-11-13 to validation-day readiness: v13 payload gate, treatment idempotence, vendor-derived alarm tiers, Loop/Nightscout conformance, failable `/healthz`, Node 22.12, tag-triggered release. 657-test suite |
 | v0.4.1 | ✅ | **v0.4.1** (2026-11-14) | The three fixes the v0.4.0 tag predates: portable `open()` flags, browser-login profile reuse, `monitor/data`'s `deviceFamily`. Plus a macOS CI leg and the GHCR publish workflow |
 | v0.4.2 | ✅ | **v0.4.2** (2026-11-15) | `doctor`: a secured Nightscout reported as unreachable, the nested `verifyauth` shape, the hardcoded discovery pin (#145). Docker `doctor:dist` / `login:dist` (#146). First release whose image is genuinely release-numbered |
-| v0.5.0 | 〰️ partial | ⬜ untagged | systemd unit shipped (v0.1.3), `Dockerfile` shipped (#61), and the **image is now published** (see the v0.5.0 section); single-binary and HASS add-on not started |
+| v0.5.0 | 〰️ partial | ⬜ untagged | **Distribution is nearly done.** systemd unit (v0.1.3), `Dockerfile` (#61), published multi-arch image (#142/#155), working single-file bundle (#162/#167), and the SEA question answered (#176: works, but needs Node ≥ 25.5). Remaining: the SEA version-floor decision (collides with ADR 0007), and the HA add-on — which only runs on HA OS/Supervised, not plain-container installs |
 | v0.6.0+ | ❌ | — | Proposed, low priority |
 
 ---
