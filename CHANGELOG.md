@@ -103,6 +103,41 @@ record, not reconstructed.
   (`bgHighLimit` / `bgLowLimit`), so validation day answers the cheap half of
   #148 for free. They are distinct from the `limits[]` schedule the issue is
   blocked on, and a test pins that they are not conflated.
+- **A manual `workflow_dispatch` of the Docker workflow repointed `latest` at an
+  unversioned build of `main`,** so `latest` meant "newest build" rather than
+  "newest release" and any deployment tracking it silently jumped to a commit
+  nobody had released. Two independent causes, both confirmed by running
+  `docker/metadata-action` v5.9.0's own `Meta` class against the workflow's tag
+  block: the unconditional `type=raw,value=latest` matched on a dispatch, and
+  metadata-action independently adds `latest` to every `type=semver` entry on a
+  tag push, so the old block emitted `latest` *twice* on a release and could not
+  have suppressed it on a dispatch even if the `raw` gate had been right. Now
+  `flavor: latest=false` disables the implicit one and the `raw` entry is gated
+  on `github.event_name == 'push' && !contains(github.ref_name, '-')`. Verified
+  for three refs: `v0.4.2` → `0.4.2, 0.4, 0, latest, sha-…`; `v0.5.0-rc.1` →
+  `0.5.0-rc.1, sha-…` (no `latest`); `workflow_dispatch` on `main` →
+  `sha-…` only.
+- **A tag whose `package.json` said something else published a mislabelled
+  image.** `release.yml` has checked tag-vs-`package.json` since the
+  v0.1.1/v0.1.2 drift, but the two workflows run in parallel, so a tag `v0.5.0`
+  against a tree reading `0.4.2` pushed `0.5.0`, `0.5`, `0`, `latest` over the
+  old code seconds before the release job failed. `docker.yml` now runs the same
+  check as its first step, before anything is built. Measured: `v0.4.2` passes,
+  `v0.5.0` against the current tree exits 1 with the mismatch named.
+- **`release.yml` matched the CHANGELOG section with an unescaped regex.**
+  `grep -qE "^## \[${TAG}\]"` treats `.` as any character, so a section headed
+  `## [0X4Y2]` satisfied the check for tag `0.4.2` and the release body was
+  then extracted from that section. Both the check and the extraction now match
+  a literal prefix. Measured on three fixtures: the literal match passes only
+  the genuine section and fails both the typo'd heading and the empty one.
+- **Nothing ever executed the published image.** The runtime stage's missing
+  `tsx` (#146) shipped green because building an image was treated as proof it
+  worked. `docker.yml` now has a `smoke` job that pulls the pushed image back
+  from GHCR and runs `dist/doctor.js` (asserting the report and exit code 1,
+  and that no module is missing), `dist/main.js` (asserting it reaches config
+  validation), and `/healthz` inside a running container (asserting the
+  `HEALTHCHECK` port answers). It also reads `:latest` before and after the
+  push and fails if a non-release build moved it.
 
 ## [0.4.2] — 2026-11-15
 
