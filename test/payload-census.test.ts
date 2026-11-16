@@ -29,6 +29,10 @@ function fullPayload(): CareLinkData {
     calibStatus: 'CAL_OK',
     sensorDurationHours: 100,
     timeToNextCalibHours: 4,
+    // The scalar BG targets. Present in the vendor's parser at chunk 6746 byte
+    // 78,875, distinct from the unmapped `limits[]` schedule (#148).
+    bgHighLimit: 10.0,
+    bgLowLimit: 3.9,
     activeInsulin: { amount: 1.2 },
     reservoirRemainingUnits: 82,
     reservoirAmount: 82,
@@ -76,6 +80,31 @@ describe('payloadCensus', () => {
     expect(c.absent).toContain('reservoirRemainingUnits');
     expect(c.absent).toContain('activeInsulin');
     expect(c.absent).toContain('pumpModelNumber');
+  });
+
+  // Issue #148: the scalar BG targets are the cheap half of that issue — they
+  // need no schedule, only a value. Whether a real pump populates them is the
+  // open question, so the census has to ASK, and report either answer.
+  it('asks about the scalar BG targets, so validation day answers #148', () => {
+    const withLimits = payloadCensus({ bgHighLimit: 10.0, bgLowLimit: 3.9 } as unknown as CareLinkData);
+    expect(withLimits.present).toContain('bgHighLimit');
+    expect(withLimits.present).toContain('bgLowLimit');
+
+    const without = payloadCensus({} as CareLinkData);
+    expect(without.absent).toContain('bgHighLimit');
+    expect(without.absent).toContain('bgLowLimit');
+  });
+
+  it('does not confuse the scalar targets with the limits[] schedule', () => {
+    // `limits[]` is a list of {index, highLimit, lowLimit} in the same 288-slot
+    // window as markers. It is a DIFFERENT field from bgHighLimit/bgLowLimit and
+    // must not be reported as though it were the scalar form.
+    const c = payloadCensus({
+      bgHighLimit: 10.0,
+      bgLowLimit: 3.9,
+      limits: [{ index: 0, highLimit: 10, lowLimit: 3.9 }],
+    } as unknown as CareLinkData);
+    expect(c.present).not.toContain('limits');
   });
 
   it('classifies both auto-mode tokens against the recorded vocabulary', () => {

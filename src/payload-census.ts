@@ -65,6 +65,14 @@ const PUMP_DATA_FIELDS = [
   'pumpModelNumber',
   'medicalDeviceFamily',
   'deviceFamily',
+  // The scalar BG-target limits. Present in the vendor's own parser at chunk
+  // 6746 byte 78,875, copied straight off the payload onto the client model
+  // (`n.bgHighLimit=i.bgHighLimit,n.bgLowLimit=i.bgLowLimit`) — i.e. they are
+  // scalars, NOT the `limits[]` schedule, which is a separate field the bridge
+  // does not map (#148). Their presence is what validation day has to establish
+  // before either can be emitted, so the census has to ask about them.
+  'bgHighLimit',
+  'bgLowLimit',
 ] as const;
 
 /**
