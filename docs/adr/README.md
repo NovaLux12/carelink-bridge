@@ -57,6 +57,7 @@ example.
 | [0007](./0007-node-20-plus-only.md) | Node.js 20+ only (Node 18 dropped) | Accepted |
 | [0008](./0008-branch-protection-enforce-admins.md) | Branch protection with `enforce_admins` | Accepted |
 | [0009](./0009-bundling-spike-results.md) | Bundling spike: esbuild produces a runnable single file | **Spike result** — enables a decision, does not make one |
+| [0010](./0010-node-sea-spike.md) | Node SEA spike: real single executable, but only on Node ≥ 25.5 | **Spike result** — enables a decision, does not make one |
 
 ## How to add a new ADR
 

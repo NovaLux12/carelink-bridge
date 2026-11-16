@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-bundle/
+dist-sea/
 logindata.json
 state.json
 *.env
