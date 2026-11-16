@@ -67,7 +67,19 @@ export function checkLoginData(loginData: LoginData | null, now = Date.now()): C
   return { name, status: 'ok', detail: `Token valid, ~${minsLeft} min until refresh${idSuffix}.` };
 }
 
-export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckResult> {
+/**
+ * Fetch the discovery document, returning both the reachability verdict and the
+ * body (for the region cross-check).
+ *
+ * One probe rather than two: the region check needs the same document the
+ * reachability check already fetched, and re-requesting it would double the
+ * requests this pre-flight makes to Medtronic — which the research repo's
+ * probing budget treats as a real cost.
+ */
+export async function probeDiscovery(
+  probe: Probe,
+  isUS: boolean,
+): Promise<{ result: CheckResult; document: unknown }> {
   const name = 'CareLink reachable';
   const host = isUS ? 'clcloud.minimed.com' : 'clcloud.minimed.eu';
   // Built from the same constant login uses. This used to be a hardcoded
@@ -77,14 +89,113 @@ export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckR
   // that login had already abandoned.
   const url = buildDiscoveryUrl(isUS);
   try {
-    const { status } = await probe(url);
+    const { status, data } = await probe(url);
     if (status === 200) {
-      return { name, status: 'ok', detail: `Discovery endpoint reachable (${isUS ? 'US' : 'EU'} region, pin ${DISCOVERY_APP_VERSION}).` };
+      return {
+        result: { name, status: 'ok', detail: `Discovery endpoint reachable (${isUS ? 'US' : 'EU'} region, pin ${DISCOVERY_APP_VERSION}).` },
+        document: data,
+      };
     }
-    return { name, status: 'fail', detail: `Discovery endpoint returned HTTP ${status} (expected 200) for pin ${DISCOVERY_APP_VERSION}.` };
+    return {
+      result: { name, status: 'fail', detail: `Discovery endpoint returned HTTP ${status} (expected 200) for pin ${DISCOVERY_APP_VERSION}.` },
+      document: undefined,
+    };
   } catch (e) {
-    return { name, status: 'fail', detail: `Could not reach ${host}: ${(e as Error).message}` };
+    return {
+      result: { name, status: 'fail', detail: `Could not reach ${host}: ${(e as Error).message}` },
+      document: undefined,
+    };
   }
+}
+
+export async function checkCareLink(probe: Probe, isUS: boolean): Promise<CheckResult> {
+  return (await probeDiscovery(probe, isUS)).result;
+}
+
+/**
+ * Flatten the discovery document's `supportedCountries` into `CODE -> region`.
+ *
+ * The live shape is a LIST of single-key objects:
+ *   `[{ "US": { region: "US", isoCode, iso3Code, flag } }, { "IT": { region: "EU", … } }, …]`
+ * 109 entries, regions `US` / `EU` / `CLINICAL`. Returns an empty map on any
+ * other shape rather than throwing — a changed document shape is worth a
+ * warning, not a crashed pre-flight.
+ */
+export function countryRegions(document: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const list = (document as { supportedCountries?: unknown } | null)?.supportedCountries;
+  if (!Array.isArray(list)) return out;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    for (const [code, value] of Object.entries(entry as Record<string, unknown>)) {
+      const region = (value as { region?: unknown } | null)?.region;
+      if (typeof region === 'string') out.set(code.toUpperCase(), region);
+    }
+  }
+  return out;
+}
+
+/**
+ * Does the configured region agree with the country the account is in?
+ *
+ * This is the honest half of "is my region wrong?" that issue #145 asks for. It
+ * does NOT read the account (that needs a token — `/patient/users/me` is 401
+ * unauthenticated), so it cannot answer for a specific account. What it CAN do
+ * without a token is catch the configuration that is wrong for *any* account in
+ * the operator's country: `supportedCountries` maps every country to the region
+ * that serves it, and nothing in the bridge currently checks that against
+ * `MMCONNECT_SERVER`.
+ *
+ * `MMCONNECT_COUNTRYCODE` is optional and defaults to `gb` in the client, so the
+ * check is a warn — silence here would be wrong (a US account pointed at the EU
+ * host gets 401s that read like invalid credentials), but failing hard would
+ * break the common case where the operator simply never set the country and the
+ * default happens to be right.
+ */
+export function checkRegion(document: unknown, env: NodeJS.ProcessEnv): CheckResult {
+  const name = 'CareLink region';
+  const configuredIsUS = (env['MMCONNECT_SERVER'] || 'EU').toUpperCase() !== 'EU';
+  const configuredRegion = configuredIsUS ? 'US' : 'EU';
+
+  // `MMCONNECT_SERVERNAME` overrides the host entirely, which makes the
+  // EU/US question moot — the operator has named a host directly.
+  if (env['MMCONNECT_SERVERNAME']?.trim()) {
+    return {
+      name,
+      status: 'ok',
+      detail: `Host set explicitly via MMCONNECT_SERVERNAME (${env['MMCONNECT_SERVERNAME'].trim()}); the EU/US switch does not apply.`,
+    };
+  }
+
+  const code = (env['MMCONNECT_COUNTRYCODE'] || 'gb').trim().toUpperCase();
+  const regions = countryRegions(document);
+  if (regions.size === 0) {
+    return {
+      name,
+      status: 'warn',
+      detail: 'Discovery document carried no readable supportedCountries, so the region could not be cross-checked.',
+    };
+  }
+
+  const expected = regions.get(code);
+  if (!expected) {
+    return {
+      name,
+      status: 'warn',
+      detail: `Country "${code}" is not in the discovery document's 109 supportedCountries — region not cross-checked.`,
+    };
+  }
+
+  if (expected === configuredRegion) {
+    return { name, status: 'ok', detail: `${code} is served by the ${expected} region, matching MMCONNECT_SERVER.` };
+  }
+  return {
+    name,
+    status: 'fail',
+    detail: `${code} is served by the ${expected} region but MMCONNECT_SERVER selects ${configuredRegion}. ` +
+      `Set MMCONNECT_SERVER=${expected === 'US' ? 'US' : 'EU'} (or unset it for the EU default), or set ` +
+      `MMCONNECT_COUNTRYCODE if you are not in ${code}.`,
+  };
 }
 
 /**
@@ -196,10 +307,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<CheckResult[]> {
   const nsUrl = env['NS'] || (env['WEBSITE_HOSTNAME'] ? 'https://' + env['WEBSITE_HOSTNAME'] : undefined);
   const secret = env['API_SECRET'] || env['api_secret'];
 
+  // One discovery fetch feeds both the reachability row and the region row.
+  const discovery = await probeDiscovery(probe, isUS);
+
   const results: CheckResult[] = [
     checkConfig(env),
     checkLoginData(loadLoginData(loginDataPath)),
-    await checkCareLink(probe, isUS),
+    discovery.result,
+    // Only meaningful when the document actually arrived; a failed reachability
+    // check already says why, and a second ✗ for the same cause is noise.
+    ...(discovery.document !== undefined ? [checkRegion(discovery.document, env)] : []),
     ...(await checkNightscout(probe, nsUrl, secret)),
   ];
   return results;
