@@ -855,7 +855,7 @@ Two non-obvious loaders in `src/config.ts`:
 
 ## Test architecture
 
-The suite is **48 files** in `test/`, one per source module plus the
+The suite is **49 files** in `test/`, one per source module plus the
 cross-module files (`client-circuit.test.ts`, `stale-data.test.ts`,
 `integration.test.ts`) that pin behaviour which only exists in the
 wiring. The test runner is `vitest run` (CI's `ci` job runs the matrix on
@@ -870,6 +870,7 @@ Node 22 and 24 — Node 20 was dropped on 2026-11-13; see
 | `auto-mode-diagnostics.test.ts` | `CARELINK_DATA_PATH=auto` surfaces the *new* route's failure while re-throwing the legacy error with `response.status` intact |
 | `ble-detection.test.ts` | PR #2 family fallback; case-insensitive + normalised family match; `deviceModel`/`sensorModel` prefix table; `NO_SENSOR` sentinel |
 | `ble-payload-shape.test.ts` | A BLE payload with `medicalDeviceFamily` absent (#111) does not throw and names the device from `deviceFamily` |
+| `bundle-subcommands.test.ts` | The single-file bundle runs each subcommand exactly once, and `--help` runs none — a property of the built artefact, so it executes the real bundle and skips (loudly) when `dist-bundle/` is stale |
 | `circuit-breaker.test.ts` | `CircuitBreaker`: issue #9 defaults (5 failures / 60s cooldown), opens on the Nth consecutive failure, one open log per trip, success resets, persisted-state restore (garbage ignored), custom threshold/cooldown |
 | `client-circuit.test.ts` | `CareLinkClient` circuit wiring: opens after 5 consecutive failures and short-circuits the 6th, success resets the counter, restores circuit state from persistent storage |
 | `clock-drift-annotation.test.ts` | `clock_drift_minutes`: present and non-zero only off the quarter-hour grid, absent (not zero) when there is no device clock or no drift |
