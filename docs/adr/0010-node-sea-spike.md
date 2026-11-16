@@ -156,6 +156,26 @@ No new runtime or dev dependency is needed for the working path: `--build-sea`
 replaces the separate `postject` injection step, which is a further reason not
 to build the Node-24 route.
 
+## Amendment (2026-11-16) — the double-run bug this spike exposed
+
+Building the binary surfaced a defect that is **not** in the SEA path but was
+visible through it: `doctor` printed its `injected env` banner twice. Both
+`doctor.ts` and `login.ts` self-execute behind an `isMainModule` guard comparing
+`process.argv[1]` with `import.meta.url` — and in ANY single-file build (bundle
+or SEA) those are the same file, so the guard is true for every embedded CLI
+module at once. The dispatcher in `src/bundle-main.ts` did not suppress them, so
+each CLI ran twice: `doctor` performed two live discovery probes per invocation,
+and `login` would have prompted twice.
+
+Fixed on `main` in
+[#174](https://github.com/NovaLux12/carelink-bridge/pull/174) by making both
+guards bundle-aware via the same compile-time define this spike's build already
+sets. **A binary built before that commit carries the bug** — the evidence
+quoted above was captured from a pre-fix build, so a rebuild after rebasing
+yields a single banner where the quoted text shows two. The `npm run sea` smoke
+test does not assert on banner count; `test/bundle-subcommands.test.ts` does,
+and it covers the bundle that the binary embeds.
+
 ## Not decided here
 
 Whether to raise the build Node to ≥ 25.5 and ship a binary, which platforms to
