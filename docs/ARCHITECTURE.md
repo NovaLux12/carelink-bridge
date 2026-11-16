@@ -63,6 +63,10 @@ src/
 ├── circuit-breaker.ts       # Closed/open/half-open breaker for CareLink fetch failures
 ├── persistent-state.ts      # `state.json` beside logindata: lastSuccessTimestamp survives restart
 ├── payload-census.ts        # Counts which pump-data tokens a payload actually carried (validation-day aid)
+├── payload-shape.ts         # isUsablePayload(): content test for "worth uploading", not one legacy clock field
+├── stale-watchdog.ts        # decideStale(): the every-fetch-failing stale decision, extracted so it is testable
+├── data-paths.ts            # siblingDataFile(): resolves logindata.json / state.json for dist/ and the bundle
+├── bundle-main.ts           # Entrypoint for `npm run bundle`: dispatches run / `doctor` / `login` subcommands
 │
 ├── carelink/                # The CareLink client + token storage
 │   ├── client.ts            # CareLinkClient: fetch() loop, BLE/carepartner branch, forceRefresh
@@ -90,7 +94,7 @@ src/
 
 ### Where to start as a new contributor
 
-1. `src/main.ts` — the **fetch loop**. 321 lines, eight top-level
+1. `src/main.ts` — the **fetch loop**. 382 lines, eight top-level
    functions (`persistState`, `fireStaleWebhook`, `checkStale`,
    `handleShutdown`, `sleep`, `uploadIfNew`, `requestLoop`,
    `ensureLogin`), the whole top-level flow. Read this first.
@@ -102,7 +106,9 @@ src/
 3. `src/transform/index.ts` — the **data model transformation**.
    `transform(data, sgvLimit)` is the main export; the module also
    exports `describeAutoMode(therapy)` and the `AutoModeSnapshot`
-   interface it returns. The rest are module-private helpers.
+   interface it returns, plus `deviceStatusId()` (the deterministic
+   devicestatus `_id`) and `suspendStatus()` (`pump.status.suspended`).
+   The rest are module-private helpers.
 
 ## End-to-end data flow
 
@@ -726,11 +732,13 @@ The full mapping is in `src/transform/index.ts`. Notable details:
   test pinning the new behaviour in `test/pump-offset.test.ts`.
 - **Last alarm.** `src/last-alarm.ts` converts the most recent
   CareLink alarm into a `NightscoutLastAlarmAnnotation` on the
-  device status entry. All 73 vendor codes are tiered into three
-  severities — `stop_using_pump`, `delivery_stopped`, `other` — read from
+  device status entry. All 73 vendor codes are tiered into four
+  severities — `stop_using_pump`, `delivery_stopped`, `attention`,
+  `other` (the `attention` tier shipped in v0.4.0 so a battery
+  reminder stops claiming "Delivery stopped") — read from
   the vendor's own parser table and pinned by `test/alarm-vendor-table.test.ts`
-  against `test/fixtures/alarm-code-map.json`. **Both** critical tiers
-  (`stop_using_pump` *and* `delivery_stopped`) go to `console.warn`,
+  against `test/fixtures/alarm-code-map.json`. **Three** of the four tiers
+  (`stop_using_pump`, `delivery_stopped` *and* `attention`) go to `console.warn`,
   always-on irrespective of verbose mode; only `other` is routed through
   the verbose logger. There is no alarm relay to Nightscout's
   `/api/v1/treatments.json`: the safety test scopes that ban to alarms
@@ -847,7 +855,7 @@ Two non-obvious loaders in `src/config.ts`:
 
 ## Test architecture
 
-The suite is **45 files** in `test/`, one per source module plus the
+The suite is **49 files** in `test/`, one per source module plus the
 cross-module files (`client-circuit.test.ts`, `stale-data.test.ts`,
 `integration.test.ts`) that pin behaviour which only exists in the
 wiring. The test runner is `vitest run` (CI's `ci` job runs the matrix on
@@ -862,12 +870,15 @@ Node 22 and 24 — Node 20 was dropped on 2026-11-13; see
 | `auto-mode-diagnostics.test.ts` | `CARELINK_DATA_PATH=auto` surfaces the *new* route's failure while re-throwing the legacy error with `response.status` intact |
 | `ble-detection.test.ts` | PR #2 family fallback; case-insensitive + normalised family match; `deviceModel`/`sensorModel` prefix table; `NO_SENSOR` sentinel |
 | `ble-payload-shape.test.ts` | A BLE payload with `medicalDeviceFamily` absent (#111) does not throw and names the device from `deviceFamily` |
+| `bundle-subcommands.test.ts` | The single-file bundle runs each subcommand exactly once, and `--help` runs none — a property of the built artefact, so it executes the real bundle and skips (loudly) when `dist-bundle/` is stale |
 | `circuit-breaker.test.ts` | `CircuitBreaker`: issue #9 defaults (5 failures / 60s cooldown), opens on the Nth consecutive failure, one open log per trip, success resets, persisted-state restore (garbage ignored), custom threshold/cooldown |
 | `client-circuit.test.ts` | `CareLinkClient` circuit wiring: opens after 5 consecutive failures and short-circuits the 6th, success resets the counter, restores circuit state from persistent storage |
 | `clock-drift-annotation.test.ts` | `clock_drift_minutes`: present and non-zero only off the quarter-hour grid, absent (not zero) when there is no device clock or no drift |
 | `config.test.ts` | `loadConfig()` env→behaviour mapping (zero direct coverage before #89), incl. the `CARELINK_QUIET` coercion table and safety defaults |
 | `cumulus.test.ts` | Cumulus data-plane helpers: base-URL derivation from discovery, `unwrapDisplayMessage`, `CumulusHttpError` |
 | `data-host-fallback.test.ts` | Dual data-host candidate order, empty-body handling, error precedence per host (#73/#74) |
+| `data-path-guard.test.ts` | Structural guard: no module computes a `logindata.json` / `state.json` path by hand — every consumer must import the shared helper |
+| `data-paths.test.ts` | `siblingDataFile()` resolves one path for all four call sites in a compiled build, and keeps the data file beside the `.mjs` in the bundle (never the filesystem root) |
 | `device-family-vocabulary.test.ts` | The published 16-family vocabulary audited family by family; every entry has a stated reason, including the ones `isBleDevice()` deliberately rejects |
 | `discovery.test.ts` | Discovery URL builder + app-version pin; `certificates[]` tripwire |
 | `doctor.test.ts` | `npm run doctor` pre-flight self-check |
@@ -892,6 +903,7 @@ Node 22 and 24 — Node 20 was dropped on 2026-11-13; see
 | `retry-policy.test.ts` | Status-aware retry: fail-fast, `Retry-After`, jittered backoff |
 | `sensor-duration-units.test.ts` | Both wire spellings for sensor age (`*Hours` legacy vs `*Minutes` v13) converted to Nightscout's hours — a 60× error would be a lie in a medical field |
 | `stale-data.test.ts` | Stale-data webhook: fires past the threshold, silent within it, once per stale period, recovers on the next successful fetch; graceful-shutdown SIGTERM flag + second-signal force-exit |
+| `stale-gauge-tracks-watchdog.test.ts` | `carelink_stale` moves on the watchdog path (every fetch failing) as well as the stale-payload path, via the real `decideStale()` |
 | `transform.test.ts` | SGV + devicestatus transform, mmol/L conversion, trend mapping |
 | `treatment-idempotence.test.ts` | One physical meal produces one row across polls with a drifting, non-slot-aligned anchor; the `_id` and `created_at` are stable, while genuinely distinct boluses at one slot stay separate |
 | `treatments.test.ts` | `markers[]` → treatments: deterministic anchor/`_id`, slot arithmetic, marker→event type mapping, dedupe-stable re-send |
