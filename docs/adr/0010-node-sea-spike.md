@@ -172,9 +172,28 @@ Fixed on `main` in
 guards bundle-aware via the same compile-time define this spike's build already
 sets. **A binary built before that commit carries the bug** — the evidence
 quoted above was captured from a pre-fix build, so a rebuild after rebasing
-yields a single banner where the quoted text shows two. The `npm run sea` smoke
-test does not assert on banner count; `test/bundle-subcommands.test.ts` does,
-and it covers the bundle that the binary embeds.
+yields a single banner where the quoted text shows two.
+
+### The smoke test was passing for the wrong reason
+
+The instructive part. `scripts/sea.mjs` asserted the daemon output contained
+`component":"login` to prove puppeteer had survived. After #174 that assertion
+**failed** — and the failure was correct: the smoke test ran the daemon with
+`CARELINK_USERNAME=''`, so it exits at config load with `Missing
+CARELINK_USERNAME` and never reaches the login path at all.
+
+It had been passing because `login.ts` was self-executing inside the artefact,
+emitting `component":"login` at import time regardless of what the daemon did.
+The double-run bug was propping the check up: fixing the bug removed the noise
+that satisfied the assertion, leaving the real gap visible.
+
+The step now supplies dummy credentials, so the daemon genuinely gets past config
+load and into `puppeteer.launch()`. **A check that passes because of an
+unrelated bug is worse than no check** — it converts a real regression into a
+green tick. This is the second time in this project that "the test was green"
+meant "the test could not fail": the first was the bundle smoke test that only
+asked whether the daemon started, which is why the bundle shipped with no
+`doctor` at all.
 
 ## Not decided here
 

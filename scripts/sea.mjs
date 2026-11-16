@@ -169,15 +169,33 @@ async function main() {
   }
   console.log('smoke    `doctor` subcommand present and reporting');
 
-  // puppeteer is the dependency ADR 0009 was about. The daemon with no config
-  // reaches login, which fetches discovery + Auth0 and calls puppeteer.launch().
-  // Asserting on `component":"login` proves the browser path was entered rather
-  // than the process dying earlier.
+  // puppeteer is the dependency ADR 0009 was about. Puppeteer is only reached
+  // once the daemon has credentials, so this step SUPPLIES dummy ones: with an
+  // empty CARELINK_USERNAME the daemon exits at config load ("Missing
+  // CARELINK_USERNAME") and never touches the browser path at all.
+  //
+  // ⚠ This assertion used to pass for the wrong reason. Before #174, `login.ts`
+  // self-executed inside the bundle (its `isMainModule` guard compares
+  // `process.argv[1]` with `import.meta.url`, which are the same file in any
+  // single-file build), so `component":"login` appeared at import time whether
+  // or not the daemon reached login. Fixing that double-run made this check fail
+  // correctly — the daemon really did die early. Credentials are what make the
+  // claim true.
   const daemon = spawnSync(sandboxBin, [], {
     cwd: sandbox,
     encoding: 'utf-8',
     timeout: 90_000,
-    env: { ...bareEnv, CARELINK_USERNAME: '', CARELINK_PASSWORD: '', API_SECRET: '', NS: '' },
+    env: {
+      ...bareEnv,
+      // Dummy values: enough to get past config load and reach the login flow.
+      // CareLink rejects them, which is fine — the assertion is about reaching
+      // puppeteer.launch(), not about authenticating.
+      CARELINK_USERNAME: 'sea-smoke',
+      CARELINK_PASSWORD: 'sea-smoke',
+      API_SECRET: 'sea-smoke',
+      NS: 'https://example.invalid',
+      CARELINK_METRICS_PORT: '0',
+    },
     input: '',
   });
   const daemonOut = `${daemon.stdout ?? ''}${daemon.stderr ?? ''}`;
