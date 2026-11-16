@@ -319,24 +319,33 @@ If you would rather copy one file than clone a repo, build the bundle:
 
 ```bash
 npm ci
-npm run bundle            # writes dist-bundle/carelink-bridge.mjs (~2.9 MB)
+npm run bundle            # writes dist-bundle/carelink-bridge.mjs (~3 MB)
 ```
 
-The output contains the whole program, puppeteer included. Copy it to the host
-and run it with `node dist-bundle/carelink-bridge.mjs`.
+The output contains the whole program, puppeteer included, and carries the same
+three commands as the source build:
+
+```bash
+node dist-bundle/carelink-bridge.mjs            # run the bridge
+node dist-bundle/carelink-bridge.mjs doctor     # pre-flight self-check
+node dist-bundle/carelink-bridge.mjs login      # interactive CareLink login
+```
+
+`--help` lists them.
 
 **It is a bundle, not a static binary.** `node:` builtins still come from the
 host, so **Node ≥ 22.12 is still required** — nothing is embedded (see
 [ADR 0009](../docs/adr/0009-bundling-spike-results.md)). Two further limits:
 
 - **Chromium is not included**, and cannot be: `puppeteer-core` never downloads
-  a browser. On a host with no Chrome/Edge/Chromium, `npm run login` falls back
-  to the terminal-paste strategy, which is what it would do from source too.
+  a browser. On a host with no Chrome/Edge/Chromium, `login` falls back to the
+  terminal-paste strategy, which is what it would do from source too.
 - **`logindata.json` and `state.json` live next to the bundle** — the same
   directory the `.mjs` is in. Keep the bundle somewhere writable.
 
-The build executes its own output before reporting success, so a broken bundle
-fails the build rather than the first run.
+The build executes its own output before reporting success, including a
+`doctor` run, so a bundle that is missing a subcommand fails the build rather
+than the first attempt to diagnose something.
 
 ## Hardening
 

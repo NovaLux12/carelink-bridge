@@ -539,9 +539,15 @@ const isMainModule = process.argv[1] &&
   (path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) ||
    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url).replace(/\.ts$/, '.js')));
 
-if (isMainModule) {
-  const dotenv = await import('dotenv');
-  dotenv.config();
+/**
+ * Run the interactive login CLI and return its exit code.
+ *
+ * Extracted from the `isMainModule` block for the same reason as `doctorCli`:
+ * in a single-file bundle `import.meta.url` IS `process.argv[1]`, so the
+ * `isMainModule` guard is true for every bundled module simultaneously and
+ * cannot be used to pick a subcommand.
+ */
+export async function loginCli(): Promise<number> {
   // Interactive one-shot CLI: progress lines are the UX, so always show info.
   // (When login() runs inside the daemon, the daemon's verbose flag governs.)
   logger.setVerbose(true);
@@ -552,7 +558,7 @@ if (isMainModule) {
   if (fs.existsSync(LOGINDATA_FILE)) {
     logger.info('logindata.json already exists.', { component: 'login' });
     logger.info('Delete it first if you want to re-login.', { component: 'login' });
-    process.exit(0);
+    return 0;
   }
 
   const username = process.env['CARELINK_USERNAME'];
@@ -568,6 +574,13 @@ if (isMainModule) {
     console.log('Login successful! You can now run: npm start');
   } catch (err) {
     logger.error('Login failed', { component: 'login', error: (err as Error).message });
-    process.exit(1);
+    return 1;
   }
+  return 0;
+}
+
+if (isMainModule) {
+  const dotenv = await import('dotenv');
+  dotenv.config();
+  process.exit(await loginCli());
 }
