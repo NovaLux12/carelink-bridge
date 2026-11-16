@@ -1,0 +1,95 @@
+name: "CareLink Bridge"
+version: "0.4.2"
+slug: "carelink_bridge"
+description: >-
+  Bridge Medtronic CareLink pump and CGM data to Nightscout.
+url: "https://github.com/NovaLux12/carelink-bridge"
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+# Docker's default init as PID 1. The bridge is a single Node process that
+# handles SIGTERM itself and does not ship an init of its own, so it needs this.
+# (Home Assistant's own base images use s6 overlay and set it false instead.)
+init: true
+# Honest label: this has never been installed against a real Supervisor.
+stage: experimental
+
+# NO `image:` KEY, DELIBERATELY.
+#
+# With `image:`, the Supervisor pulls that image and the tag is always
+# `version` — it never builds the Dockerfile in this folder. That would pull
+# ghcr.io/novalux12/carelink-bridge:0.4.2, which is the plain bridge image: it
+# runs `CMD ["node","dist/main.js"]` with no entrypoint, as `USER node`.
+# Measured against it (2026-11-16):
+#   * savePersistentState('/data/state.json') -> EACCES, because the Supervisor
+#     creates /data as root:root 0755 and the image runs as uid 1000;
+#   * it has no way to place logindata.json, which it pins to /app/logindata.json
+#     — and /app is destroyed on every container recreate, so every app update
+#     would silently leave the bridge with no token.
+#
+# So this app builds a thin layer over that exact image (see Dockerfile) which
+# adds an entrypoint. All bridge code and dependencies still come from the
+# published release image; the FROM tag in the Dockerfile is the version pin.
+#
+# This is not a guess about Supervisor behaviour — `supervisor/apps/model.py`
+# defines `need_build` as `ATTR_IMAGE not in self.data`, and the pull tag is
+# `self.version` (`supervisor/docker/app.py`). Adding `image:` here would
+# therefore pull `<that image>:0.4.2` and skip the Dockerfile entirely.
+#
+# The follow-up that would let this key be set: publish the app image to its own
+# repository path from the existing GHCR workflow, e.g.
+# `ghcr.io/novalux12/carelink-bridge-ha`, tagged with the same semver. Then
+# `image:` works, because the tag the Supervisor wants (`version`) is the one
+# that build produces. Baking the entrypoint into the main image is *not* an
+# option — it would change the plain-Docker deployment path too.
+
+# `app_config` gives /config: a persistent folder the user can reach from the
+# host. That is where logindata.json is placed. `data` (/data) is always mounted
+# and needs no entry here.
+map:
+  - type: app_config
+    read_only: false
+
+# Credentials and the Nightscout URL deliberately have no defaults, so the
+# Supervisor requires the user to fill them in before the app can start, rather
+# than starting and failing with "Missing CARELINK_USERNAME".
+options:
+  mmconnect_server: EU
+  mmconnect_countrycode: gb
+  mmconnect_langcode: en
+  carelink_interval: 300
+  carelink_sgv_limit: 24
+  carelink_quiet: true
+  log_format: pretty
+  carelink_assume_timezone: ""
+  carelink_stale_threshold_minutes: 15
+  carelink_data_path: auto
+  carelink_app_version: "3.8.0"
+  carelink_circuit_threshold: 5
+  carelink_circuit_cooldown_s: 60
+  carelink_metrics_port: 0
+
+schema:
+  carelink_username: str
+  carelink_password: password
+  api_secret: password
+  ns: str
+  mmconnect_server: list(EU|US)
+  mmconnect_countrycode: str
+  mmconnect_langcode: str
+  mmconnect_servername: str?
+  carelink_interval: int(30,)
+  carelink_sgv_limit: int(1,288)
+  carelink_quiet: bool
+  log_format: list(pretty|json)
+  carelink_patient: str?
+  carelink_assume_timezone: str?
+  carelink_stale_threshold_minutes: int(1,)
+  stale_webhook_url: str?
+  carelink_data_path: list(auto|cumulus|legacy)
+  carelink_app_version: str
+  carelink_circuit_threshold: int(1,)
+  carelink_circuit_cooldown_s: int(0,)
+  carelink_metrics_port: int(0,)
