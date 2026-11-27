@@ -102,3 +102,79 @@ describe('treatment idempotence across polls', () => {
     expect(out.treatments.reduce((n, t) => n + (t.insulin as number), 0)).toBe(6);
   });
 });
+
+/**
+ * The 780G's own marker shape, measured 2026-11-27.
+ *
+ * The slot-based tests above use a synthetic payload with no `dateTime`. Real
+ * NGP markers carry one, and on those the slot math is measurably unstable:
+ * the same 12 g meal came back with index 228 then 196 (166 s of derived drift)
+ * while `dateTime` never moved. Three distinct `_id`s were minted for that one
+ * meal, Nightscout appended all three, and the dashboard read **COB 15.1 g**
+ * for carbs the pump had already finished absorbing.
+ *
+ * `dateTime` is now the primary source; the slot is only a fallback.
+ */
+describe('780G marker shape: dateTime beats slot arithmetic', () => {
+  /** A real NGP payload: index slides, dateTime is fixed. */
+  function ngpPayload(anchorMs: number, index: number, dateTime: string): CareLinkData {
+    return {
+      lastMedicalDeviceDataUpdateServerTime: anchorMs,
+      clientTimeZoneName: 'GMT+00:00',
+      sgs: [{ sg: 145, datetime: '2026-11-27T12:25:01.000Z', version: 1, kind: 'SG' }],
+      markers: [
+        { index, type: 'MEAL', amount: 34, dateTime, id: 2 },
+        {
+          index, type: 'INSULIN', bolusType: 'FAST', completed: true,
+          programmedFastAmount: 7.3, deliveredFastAmount: 7.3,
+          programmedExtendedAmount: 0, deliveredExtendedAmount: 0,
+          dateTime, id: 2,
+        },
+      ],
+    } as unknown as CareLinkData;
+  }
+
+  const AT = '2026-11-27T12:23:03.000-00:00';
+
+  it('keeps ONE _id when the slot index slides but dateTime is fixed', () => {
+    // Exactly the two captures measured on the live pump, 2 h 40 m apart.
+    const poll1 = ngpPayload(Date.parse('2026-11-27T15:22:04.466Z'), 251, AT);
+    const poll2 = ngpPayload(Date.parse('2026-11-27T18:04:50.134Z'), 219, AT);
+
+    const t1 = transform(poll1, 24).treatments.find((t) => t.eventType === 'Meal Bolus');
+    const t2 = transform(poll2, 24).treatments.find((t) => t.eventType === 'Meal Bolus');
+
+    expect(t1).toBeDefined();
+    expect(t2).toBeDefined();
+    expect(t1!._id).toBe(t2!._id);
+    expect(t1!.created_at).toBe(t2!.created_at);
+    // And the time is the pump's own, not a quantised slot boundary.
+    expect(t1!.created_at).toBe('2026-11-27T12:23:03.000Z');
+    expect(t1!.carbs).toBe(34);
+    expect(t1!.insulin).toBe(7.3);
+  });
+
+  it('holds across a whole afternoon of polls', () => {
+    const ids = new Set<string>();
+    let anchor = Date.parse('2026-11-27T15:22:04.466Z');
+    let index = 251;
+    for (let poll = 0; poll < 40; poll++) {
+      const t = transform(ngpPayload(anchor, index, AT), 24)
+        .treatments.find((x) => x.eventType === 'Meal Bolus');
+      ids.add(t!._id as string);
+      anchor += MARKER_SLOT_MS + 1_700;   // one slot of drift plus jitter
+      index -= 1;
+    }
+    // ONE id across 40 polls is the whole point: Nightscout dedups on _id.
+    expect(ids.size).toBe(1);
+  });
+
+  it('falls back to the QUANTISED anchor when dateTime is absent', () => {
+    // No dateTime: the slot path must still be idempotent. Passing the raw
+    // anchor here re-introduced sub-slot jitter and broke this.
+    const p1 = transform(payload(MEAL_AT + 35 * 60_000 + 381, 280), 24).treatments[0];
+    const p2 = transform(payload(MEAL_AT + 35 * 60_000 + 381 + MARKER_SLOT_MS + 2_500, 279), 24)
+      .treatments[0];
+    expect(p1._id).toBe(p2._id);
+  });
+});

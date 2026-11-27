@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   mapMarkers,
   markerTime,
+  markerTimeOrOffset,
   treatmentId,
   MARKER_SLOT_MS,
   MARKER_LAST_SLOT,
@@ -134,13 +135,17 @@ describe('mapMarkers', () => {
   });
 
   it('counts the declared-but-unhandled SmartGuard markers instead of inventing a shape', () => {
-    // AUTO_BASAL_DELIVERY and AUTO_MODE_STATUS are in the 11-token vocabulary
-    // and are never handled by the vendor's own client either. Guessing a
-    // treatment shape for them would be fabrication.
+    // AUTO_BASAL_DELIVERY and EXERCISE are in the 11-token vocabulary and are
+    // never handled by the vendor's own client either. Guessing a treatment
+    // shape for them would be fabrication.
+    //
+    // AUTO_MODE_STATUS was in this list until 2026-11-27, when a real 780G
+    // payload showed it carries `autoModeOn` and is worth recording: SmartGuard
+    // on/off is the context that makes a 780G trace readable. It now maps to a
+    // Note and is asserted separately below.
     const res = mapMarkers(
       [
         { index: 274, type: 'AUTO_BASAL_DELIVERY', value: 0.8 },
-        { index: 273, type: 'AUTO_MODE_STATUS', value: 1 },
         { index: 272, type: 'EXERCISE', value: 30 },
       ],
       ANCHOR,
@@ -148,9 +153,18 @@ describe('mapMarkers', () => {
     expect(res.treatments).toEqual([]);
     expect(res.unmapped).toEqual({
       AUTO_BASAL_DELIVERY: 1,
-      AUTO_MODE_STATUS: 1,
       EXERCISE: 1,
     });
+  });
+
+  it('records AUTO_MODE_STATUS as a Note rather than discarding it', () => {
+    const res = mapMarkers(
+      [{ index: 273, type: 'AUTO_MODE_STATUS', autoModeOn: true }],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(1);
+    expect(res.treatments[0]['eventType']).toBe('Note');
+    expect(String(res.treatments[0]['notes'])).toContain('SmartGuard auto-mode ON');
   });
 
   it('counts a marker it cannot date rather than dropping it silently', () => {
@@ -545,5 +559,132 @@ describe('mapMarkers', () => {
       expect(insulin).toBe(5000);
       expect(res.treatments.length).toBe(5000);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The 780G's own marker shape, measured 2026-11-27 on a live BLE payload.
+//
+// Every case below is a field the real pump populates and the bridge was
+// reading in the wrong place. The bolus one lost insulin outright: an INSULIN
+// marker with no `amount`/`value` was counted "no amount" and discarded, so
+// Nightscout held no dose at all for the pump era.
+// ---------------------------------------------------------------------------
+describe('780G BLE marker shape (measured 2026-11-27)', () => {
+  it('reads the dose from deliveredFastAmount when amount/value are absent', () => {
+    const res = mapMarkers(
+      [{ index: 280, type: 'INSULIN', kind: 'Marker',
+         programmedFastAmount: 4.4, deliveredFastAmount: 1.85,
+         programmedExtendedAmount: 0, deliveredExtendedAmount: 0,
+         bolusType: 'FAST', activationType: 'RECOMMENDED', completed: true }],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(1);
+    // DELIVERED, not programmed: the pump stopped partway through.
+    expect(res.treatments[0]['insulin']).toBe(1.85);
+  });
+
+  it('records the programmed/delivered shortfall in notes', () => {
+    const res = mapMarkers(
+      [{ index: 280, type: 'INSULIN', programmedFastAmount: 4.4,
+         deliveredFastAmount: 1.85, programmedExtendedAmount: 0,
+         deliveredExtendedAmount: 0, bolusType: 'FAST' }],
+      ANCHOR,
+    );
+    expect(String(res.treatments[0]['notes'])).toContain('programmed=4.4U');
+    expect(String(res.treatments[0]['notes'])).toContain('delivered=1.85U');
+  });
+
+  it('pairs a BLE bolus with its meal instead of emitting it as a correction', () => {
+    const res = mapMarkers(
+      [
+        { index: 280, type: 'MEAL', amount: 12 },
+        { index: 280, type: 'INSULIN', programmedFastAmount: 4.4,
+          deliveredFastAmount: 4.4, programmedExtendedAmount: 0,
+          deliveredExtendedAmount: 0, bolusType: 'FAST' },
+      ],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(1);
+    expect(res.treatments[0]['eventType']).toBe('Meal Bolus');
+    expect(res.treatments[0]['carbs']).toBe(12);
+    expect(res.treatments[0]['insulin']).toBe(4.4);
+  });
+
+  it('adds the fast and extended halves of a COMBO bolus', () => {
+    const res = mapMarkers(
+      [{ index: 280, type: 'INSULIN', bolusType: 'COMBO',
+         programmedFastAmount: 2, deliveredFastAmount: 2,
+         programmedExtendedAmount: 3, deliveredExtendedAmount: 3,
+         programmedDuration: 120, deliveredExtendedAmount2: 0 }],
+      ANCHOR,
+    );
+    expect(res.treatments[0]['insulin']).toBe(5);
+    expect(String(res.treatments[0]['notes'])).toContain('bolus=COMBO');
+    expect(String(res.treatments[0]['notes'])).toContain('extended=120min');
+  });
+
+  it('does not invent a bolus from an all-zero delivered marker', () => {
+    // A cancelled bolus: the pump was told 4.4 U and delivered nothing.
+    const res = mapMarkers(
+      [{ index: 280, type: 'INSULIN', programmedFastAmount: 4.4,
+         deliveredFastAmount: 0, programmedExtendedAmount: 0,
+         deliveredExtendedAmount: 0 }],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(0);
+    expect(res.unmapped['INSULIN(zero amount)']).toBe(1);
+  });
+
+  it('dates an index:-1 state marker from its relativeOffset instead of dropping it', () => {
+    const res = mapMarkers(
+      [{ index: -1, type: 'AUTO_MODE_STATUS', kind: 'Marker',
+         autoModeOn: false, relativeOffset: -86400,
+         dateTime: '2026-11-26T15:23:03.000-00:00' }],
+      ANCHOR,
+    );
+    expect(res.treatments).toHaveLength(1);
+    expect(res.treatments[0]['eventType']).toBe('Note');
+    expect(String(res.treatments[0]['notes'])).toContain('SmartGuard auto-mode OFF');
+    expect(new Date(String(res.treatments[0]['created_at'])).getTime())
+      .toBe(ANCHOR - 86_400_000);
+  });
+
+  it('records a pump TIME_CHANGE rather than swallowing it', () => {
+    const res = mapMarkers(
+      [{ index: 216, type: 'TIME_CHANGE',
+         previousDateTime: '2026-11-27T09:28:49.000Z' }],
+      ANCHOR,
+    );
+    expect(res.treatments[0]['eventType']).toBe('Note');
+    expect(String(res.treatments[0]['notes'])).toContain('pump clock changed');
+  });
+
+  it('records an ACTIVE low-glucose suspend but not the resumed marker', () => {
+    const active = mapMarkers(
+      [{ index: 280, type: 'LOW_GLUCOSE_SUSPENDED', deliverySuspended: true }],
+      ANCHOR,
+    );
+    expect(active.treatments[0]['eventType']).toBe('Note');
+    expect(String(active.treatments[0]['notes'])).toContain('low glucose suspend');
+
+    const resumed = mapMarkers(
+      [{ index: 281, type: 'LOW_GLUCOSE_SUSPENDED', deliverySuspended: false }],
+      ANCHOR,
+    );
+    expect(resumed.treatments).toHaveLength(0);
+  });
+
+  it('refuses a future-dated offset rather than emitting it', () => {
+    // markerTimeOrOffset must never produce a time after the anchor, which is
+    // what "now" stamping looked like before the fix on the CGM path.
+    expect(markerTimeOrOffset({ index: -1, relativeOffset: 600 }, ANCHOR)).toBeNull();
+  });
+
+  it('still prefers the slot over the offset when both are present', () => {
+    // The slot snaps to the poll grid, so re-sends dedupe exactly. The offset
+    // is the fallback, not the primary.
+    const bySlot = markerTime(280, ANCHOR);
+    expect(markerTimeOrOffset({ index: 280, relativeOffset: -99_999 }, ANCHOR)).toBe(bySlot);
   });
 });

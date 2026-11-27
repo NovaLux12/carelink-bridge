@@ -1,7 +1,7 @@
 import * as logger from '../logger.js';
 import type { CareLinkData } from '../types/carelink.js';
 import { evaluateLastAlarm, logLastAlarm } from '../last-alarm.js';
-import { mapMarkers } from './treatments.js';
+import { mapMarkers, markerTimeOrOffset, quantiseAnchor } from './treatments.js';
 
 import type { NightscoutSGVEntry, NightscoutDeviceStatus, NightscoutLastAlarmAnnotation, TransformResult } from '../types/nightscout.js';
 import { CARELINK_TREND_TO_NIGHTSCOUT_TREND } from './trend-map.js';
@@ -38,15 +38,99 @@ const STALE_DATA_THRESHOLD_MINUTES = 20;
 const MMOL_L_TO_MGDL = 18.0182;
 
 /**
- * Detects whether a CareLink payload reports glucose in mmol/L. CareLink has
- * shipped both `bgUnits` and `bgunits` casing historically; we prefer the
- * lower-case one and accept either. Returns true only for the explicit mmol
- * marker — any other/unknown unit is treated as mg/dL (do not silently
- * convert).
+ * Detects whether a CareLink payload reports glucose in mmol/L.
+ *
+ * CareLink has shipped both `bgUnits` and `bgunits` casing historically; we
+ * prefer the lower-case one and accept either. Returns true only for the
+ * explicit mmol marker — any other/unknown unit is treated as mg/dL (do not
+ * silently convert).
+ *
+ * ⚠ THE PAYLOAD CAN LIE ABOUT THIS — do not trust `bgUnits` alone.
+ *
+ * Measured 2026-11-27 against a real 780G (MMT-1885, medicalDeviceFamily NGP,
+ * Instinct sensor): the BLE `display/message` response declared
+ * `"bgUnits":"MMOL_L"` while every `sgs[].sg` in it was mg/dL. Trusting the
+ * declaration multiplied each reading by 18.0182, so Nightscout received
+ * 4559 mg/dL for a true 253 and rendered 253 mmol/L. Both ends of the chain
+ * were "working"; the number was simply nonsense.
+ *
+ * The payload carries its own proof of scale, and it is the proof we use:
+ * `sgBelowLimit` (50) and `limits[].lowLimit` (68) are in the SAME unit as
+ * `sg`. 68 mg/dL is 3.78 mmol/L — exactly the pump's configured low alert —
+ * whereas 68 mmol/L is not a blood glucose at all. A declared-mmol payload
+ * whose own low limit exceeds any survivable mmol/L value is mg/dL wearing
+ * the wrong label.
  */
 function isMmolL(data: CareLinkData): boolean {
   const u = (data.bgunits ?? data.bgUnits ?? '').toUpperCase();
-  return u === 'MMOL_L' || u === 'MMOL/L' || u === 'MMOL';
+  const declaredMmol = u === 'MMOL_L' || u === 'MMOL/L' || u === 'MMOL';
+  if (!declaredMmol) return false;
+  return !unitDeclarationIsImplausible(data);
+}
+
+/** Highest reading that could be a real mmol/L blood glucose. */
+const MMOL_PLAUSIBILITY_CEILING = 40;
+
+/**
+ * Payload shapes already reported as mislabelled, so the warning is emitted
+ * once per distinct evidence rather than once per reading or per fetch.
+ *
+ * The guard runs inside the per-reading conversion, so without this a single
+ * 288-reading payload logs 288 identical warnings — which is how a real signal
+ * becomes noise an operator learns to skip.
+ */
+const mislabelledUnitShapesReported = new Set<string>();
+
+/** Test seam: forget which mislabelled shapes have been reported. */
+export function resetMislabelledUnitWarning(): void {
+  mislabelledUnitShapesReported.clear();
+}
+
+/**
+ * True when a payload declaring mmol/L carries numbers that cannot be mmol/L.
+ *
+ * Checks the scale-bearing fields the payload supplies for itself, in order of
+ * reliability. Any ONE of them being impossible in mmol/L is enough: they all
+ * share the unit of `sg`, so they cannot disagree unless the label is wrong.
+ */
+function unitDeclarationIsImplausible(data: CareLinkData): boolean {
+  const raw = data as unknown as Record<string, unknown>;
+
+  const limits = Array.isArray(raw['limits']) ? (raw['limits'] as Record<string, unknown>[]) : [];
+  const candidates: number[] = [];
+  const push = (v: unknown): void => {
+    const n = typeof v === 'number' ? v : Number(v);
+    // 0 is how this payload spells "no limit configured" — skip it, it is not
+    // evidence either way and would otherwise look like an impossible mmol low.
+    if (Number.isFinite(n) && n > 0) candidates.push(n);
+  };
+
+  push(raw['sgBelowLimit']);
+  push(raw['belowHypoLimit']);
+  push(raw['aboveHyperLimit']);
+  for (const limit of limits) {
+    push(limit['lowLimit']);
+    push(limit['highLimit']);
+  }
+  for (const s of Array.isArray(data.sgs) ? data.sgs : []) push(s?.sg);
+
+  const max = candidates.length ? Math.max(...candidates) : undefined;
+  if (max !== undefined && max > MMOL_PLAUSIBILITY_CEILING) {
+    const lowLimit = raw['sgBelowLimit'] ?? limits[0]?.['lowLimit'] ?? '?';
+    const declared = String(raw['bgUnits'] ?? raw['bgunits']);
+    const shape = `${declared}|max=${max}|low=${String(lowLimit)}`;
+    if (!mislabelledUnitShapesReported.has(shape)) {
+      mislabelledUnitShapesReported.add(shape);
+      logger.warn(
+        `Payload declares ${declared} but carries values up to ${max}, which cannot be ` +
+          `mmol/L. Treating readings as mg/dL. (Low limit ${String(lowLimit)} is the tell.)`,
+        { component: 'transform' },
+      );
+    }
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -271,13 +355,46 @@ function deviceBatteryPercent(data: CareLinkData): number {
 }
 
 /**
- * Sensor age / time-to-calibration in HOURS.
+ * Is this byte a "no value" sentinel rather than a measurement?
+ *
+ * The 780G reports several uint8/uint16 counters as **all-ones when unknown**:
+ * measured 2026-11-27, `gstBatteryLevel: 255` and `timeToNextCalibHours: 65535`
+ * (0xFFFF), on a pump whose battery is simultaneously reported as 100% by
+ * `medicalDeviceBatteryLevelPercent`. Passing those through would publish a
+ * 255% battery and a 65535-hour calibration countdown — two numbers that look
+ * like data, are obviously impossible, and would make every future reading of
+ * this record suspect.
+ *
+ * 255 and 65535 are the whole of the vocabulary observed so far; the guard is
+ * a set rather than a `>= 255` test so an unobserved sentinel is not silently
+ * folded into "unknown" without someone noticing it exist.
+ */
+const UNSET_SENTINELS: ReadonlySet<number> = new Set([255, 65535, -1]);
+
+function withoutSentinel(v: number | undefined): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  return UNSET_SENTINELS.has(v) ? undefined : v;
+}
+
+/**
+ * Sensor time-REMAINING / time-to-calibration in HOURS.
+ *
+ * ⚠ NOT "sensor age". The field name carries no direction and this was recorded
+ * backwards once: `sensorDurationHours` / `sensorDurationMinutes` are the time
+ * LEFT, not the time elapsed (VERIFIED live 2026-11-27 on a 780G + Instinct —
+ * 21163 minutes read 7.5 h after insertion, against 360 h of 15-day wear, places
+ * insertion at the right minute; as elapsed it is impossible). Anything that
+ * renders this as age puts an expiry alarm on a sensor fitted that morning.
+ * The pump also OMITS the pair when it loses the sensor, while `sensorState`
+ * stays NO_ERROR_MESSAGE — so a missing value here means the LINK is down, not
+ * that there is no sensor. Detail: carelink-api-research
+ * findings-log/2026-11-27-display-message-field-semantics.
  *
  * The wire has two spellings depending on payload generation (xDrip
  * RecentData.java:112-113 legacy `*Hours`; :146-147 newer `*Minutes`, in the
  * same block as `clientTimeZoneName`). A v13 display/message payload sends the
- * minutes pair, so reading only `*Hours` yields `undefined` for sensor age on
- * exactly the device this bridge is being prepared for.
+ * minutes pair, so reading only `*Hours` yields `undefined` on exactly the
+ * device this bridge is being prepared for.
  *
  * Nightscout's `connect` block is documented in hours (and every value this
  * bridge has ever written there was hours), so minutes are converted rather
@@ -288,9 +405,10 @@ function sensorHours(
   hours: number | undefined,
   minutes: number | undefined,
 ): number | undefined {
-  if (typeof hours === 'number' && Number.isFinite(hours)) return hours;
+  if (typeof hours === 'number' && Number.isFinite(hours)) return withoutSentinel(hours);
   if (typeof minutes === 'number' && Number.isFinite(minutes)) {
-    return minutes / 60;
+    const clean = withoutSentinel(minutes);
+    return clean === undefined ? undefined : clean / 60;
   }
   return undefined;
 }
@@ -530,6 +648,20 @@ function deviceStatusEntry(
     ? data.lastMedicalDeviceDataUpdateServerTime
     : newestReadingTime(data);
 
+  // `mills` as well as `created_at`, because Nightscout's IOB plugin reads it.
+  //
+  // `lib/plugins/iob.js` (v15.0.9) fromDeviceStatus(), pump branch:
+  //
+  //     iob: iobPump.iob || iobPump.bolusiob,
+  //     mills: devicestatusEntry.mills
+  //
+  // It takes the timestamp from the TOP-LEVEL `mills`, not from
+  // `pump.iob.timestamp` — so without this field the plugin computes
+  // `time - undefined` = NaN and discards the whole IOB figure, however
+  // correct the number inside `pump.iob` is. Measured: Nightscout reported
+  // `iob_u: null` for a devicestatus row carrying `pump.iob.bolusiob: 0`.
+  const mills = deviceUpdateAt;
+
   // A stable 24-hex `_id`, because without one Nightscout appends on every poll.
   //
   // `lib/server/devicestatus.js` (v15.0.9) only skips a record whose `_id` is a
@@ -549,6 +681,7 @@ function deviceStatusEntry(
     return {
       _id: statusId,
       created_at: timestampAsString(deviceUpdateAt),
+      mills,
       device: deviceName(data),
       uploader: {
         battery: deviceBatteryPercent(data),
@@ -575,6 +708,7 @@ function deviceStatusEntry(
   return {
     _id: statusId,
     created_at: timestampAsString(deviceUpdateAt),
+    mills,
     device: deviceName(data),
     uploader: {
       battery: data.conduitBatteryLevel,
@@ -593,12 +727,40 @@ function deviceStatusEntry(
       // published separately so the value is not silently lost.
       reservoir: reservoirUnits(data),
       ...(pct !== undefined ? { reservoirPercent: pct } : {}),
-      iob: {
-        timestamp: timestampAsString(deviceUpdateAt),
-        bolusiob: data.activeInsulin?.amount != null && data.activeInsulin.amount >= 0
-          ? data.activeInsulin.amount
-          : undefined,
-      },
+      // Nightscout renders `256U` on its own, which sat next to an unlabelled
+      // battery percentage as two numbers with no way to tell which was which.
+      // Name both quantities by their units instead. Only the DISPLAY is
+      // overridden — `reservoir` and `reservoirPercent` above still carry the
+      // raw values for anything that computes from them.
+      ...(() => {
+        const units = reservoirUnits(data);
+        if (units === undefined) return {};
+        const rounded = Math.round(units);
+        return {
+          reservoir_display_override:
+            pct !== undefined
+              ? `${rounded}U · ${pct}%`
+              : `${rounded}U`,
+        };
+      })(),
+      iob: (() => {
+        const amount = data.activeInsulin?.amount;
+        // `iob` AND `bolusiob`, deliberately both.
+        //
+        // Nightscout's plugin does `iobPump.iob || iobPump.bolusiob`. With only
+        // `bolusiob: 0` that expression is `undefined || 0`, which is 0 and
+        // fine — but a genuine 0 must not be mistaken for "absent", and more
+        // importantly the MM Connect convention is `iob`, so emitting only the
+        // alias relies on the fallback working. Write the value to both keys:
+        // `0 || 0` is 0, and any consumer reading either name gets the truth.
+        const value = typeof amount === 'number' && Number.isFinite(amount) && amount >= 0
+          ? amount
+          : undefined;
+        return {
+          timestamp: timestampAsString(deviceUpdateAt),
+          ...(value !== undefined ? { iob: value, bolusiob: value } : {}),
+        };
+      })(),
       // The pump clock is what this field reports. When the payload carries no
       // device time (v13 display/message), the newest reading is the best
       // available statement about "when this device last spoke", and is
@@ -625,7 +787,110 @@ function deviceStatusEntry(
       // total, not a delivery flag — and inventing one would put a fabricated
       // state on the pump pill.
       ...(suspendStatus(data, autoMode) ?? {}),
+      /**
+       * Rows for the pump pill's info panel.
+       *
+       * Nightscout's pump plugin renders every key/value here as a labelled
+       * row when the pill is opened (`lib/plugins/pump.js`, the `extended`
+       * branch). It has no native slot for any of the 780G-specific facts
+       * below, so without this they are visible only in the raw API — which is
+       * not "in Nightscout" in any sense Jack can use.
+       *
+       * Kept to facts that CHANGE a decision, and flat strings: a nested object
+       * renders as `[object Object]`.
+       */
+      extended: (() => {
+        const rows: Record<string, string | number> = {};
+        const info = data.medicalDeviceInformation;
+
+        // The recall check, on screen. FDA Class 2 Z-2698-2026 covers 6.62
+        // paired with the Instinct sensor; 6.63 is the fix.
+        if (info?.softwareRevision) rows['Pump software'] = String(info.softwareRevision);
+        if (info?.modelNumber) rows['Pump model'] = String(info.modelNumber);
+
+        // What basal is actually programmed. The BASAL pill shows the
+        // Nightscout PROFILE's rate, which is a different number and was
+        // 2.08 against the pump's 1.2 until 2026-11-27.
+        const rate = data.basal?.basalRate;
+        if (typeof rate === 'number' && Number.isFinite(rate)) {
+          rows['Pump basal'] = `${rate} U/hr (${data.basal?.activeBasalPattern ?? 'profile'})`;
+        }
+
+        // SmartGuard. `FEATURE_OFF` until Monday, then AUTO_BASAL.
+        const shield = autoMode?.shieldState;
+        if (shield) rows['SmartGuard'] = String(shield);
+        if (autoMode?.plgmState) rows['Low suspend'] = String(autoMode.plgmState);
+
+        // Reservoir as the pump's own percent — the units figure is on the pill
+        // already; the percent is what the 780G actually reports.
+        const level = data.reservoirLevelPercent;
+        if (typeof level === 'number') rows['Reservoir level'] = `${level}%`;
+
+        // Sensor age and calibration, in the units clinicians read.
+        const sensorH = sensorHours(data.sensorDurationHours, data.sensorDurationMinutes);
+        if (sensorH !== undefined) rows['Sensor age'] = `${Math.round(sensorH)} h`;
+        const calibH = sensorHours(data.timeToNextCalibHours, data.timeToNextCalibrationMinutes);
+        if (calibH !== undefined) rows['Next calibration'] = `${Math.round(calibH)} h`;
+
+        if (data.conduitBatteryStatus) rows['Phone link'] = String(data.conduitBatteryStatus);
+        if (data.sensorState && data.sensorState !== 'NO_ERROR_MESSAGE') {
+          rows['Sensor state'] = String(data.sensorState);
+        }
+        if (data.systemStatusMessage && data.systemStatusMessage !== 'NO_ERROR_MESSAGE') {
+          rows['Pump message'] = String(data.systemStatusMessage);
+        }
+
+        return rows;
+      })(),
     },
+    /**
+     * Pump identity and the settings that qualify the numbers above.
+     *
+     * Everything here is on the wire and was previously discarded. Two fields
+     * are load-bearing rather than decorative:
+     *
+     *  - `softwareRevision` answers the FDA Class 2 recall check (Z-2698-2026:
+     *    6.62 + Instinct stops delivery). The pump in use reports 6.63V, so
+     *    the fix is present — a fact nothing else in Nightscout records.
+     *  - `basalRate` is the only record of what basal was running. In MANUAL
+     *    mode it IS the delivered rate; under SmartGuard the algorithm sets
+     *    delivery and this is the underlying profile, which is why it is
+     *    nested under `pump.basal` rather than presented as `pump.basal` at
+     *    top level where it would read as an enacted rate.
+     *
+     * Emitted only when the payload carries something: a CGM-only account must
+     * not gain a phantom pump block, same rule as `autoMode`.
+     */
+    ...(() => {
+      const info = data.medicalDeviceInformation;
+      const basal = data.basal;
+      const hardware: Record<string, unknown> = {};
+      if (info?.manufacturer !== undefined) hardware.manufacturer = info.manufacturer;
+      if (info?.modelNumber !== undefined) hardware.model = info.modelNumber;
+      if (info?.hardwareRevision !== undefined) hardware.hardwareRevision = info.hardwareRevision;
+      if (info?.firmwareRevision !== undefined) hardware.firmwareRevision = info.firmwareRevision;
+      if (info?.softwareRevision !== undefined) hardware.softwareRevision = info.softwareRevision;
+
+      const basalBlock: Record<string, unknown> = {};
+      if (basal?.activeBasalPattern !== undefined) basalBlock.pattern = basal.activeBasalPattern;
+      if (typeof basal?.basalRate === 'number' && Number.isFinite(basal.basalRate)) {
+        basalBlock.rate = basal.basalRate;
+        // U/hr is the pump's unit; state it so a consumer cannot read the
+        // number as a daily total.
+        basalBlock.units = 'U/hr';
+      }
+
+      const limits: Record<string, unknown> = {};
+      if (typeof data.maxAutoBasalRate === 'number') limits.maxBasalRate = data.maxAutoBasalRate;
+      if (typeof data.maxBolusAmount === 'number') limits.maxBolus = data.maxBolusAmount;
+
+      const block: Record<string, unknown> = {};
+      if (Object.keys(hardware).length) block.hardware = hardware;
+      if (Object.keys(basalBlock).length) block.basal = basalBlock;
+      if (Object.keys(limits).length) block.limits = limits;
+      if (data.systemStatusMessage !== undefined) block.statusMessage = data.systemStatusMessage;
+      return Object.keys(block).length ? { carelink: block } : {};
+    })(),
     connect: {
       sensorState: data.sensorState,
       calibStatus: data.calibStatus,
@@ -831,7 +1096,56 @@ export function transform(data: CareLinkData, sgvLimit?: number): TransformResul
   const markerAnchor = Number.isFinite(data.lastMedicalDeviceDataUpdateServerTime)
     ? (data.lastMedicalDeviceDataUpdateServerTime as number)
     : newestReadingTime(data);
-  const markers = mapMarkers(data.markers, markerAnchor);
+
+  // Date markers from the pump's own `dateTime` string, NOT from the slot index.
+  //
+  // The slot index is measured against a different clock than the anchor
+  // (`lastMedicalDeviceDataUpdateServerTime`), so the derived time slides between
+  // fetches — measured 166 s of drift on an unchanged meal marker across two
+  // polls 2 h 40 m apart, and the quantised value flipped between :15, :20 and
+  // :25 on the hour. `treatmentId()` hashes that time, so each poll minted a new
+  // `_id` and Nightscout appended a duplicate. Measured consequence: **three**
+  // rows for the 34 g meal and **three** for the 12 g, so COB read 15.1 g on a
+  // dashboard where the pump reported 46 g of carbs absorbed hours earlier.
+  //
+  // `dateTime` did not move at all across the same polls, and it is the pump's
+  // own statement of when the event happened.
+  //
+  // The fallback still has to be deterministic, so it uses the QUANTISED anchor
+  // — the same value `emit()` passes as `alignedAnchor`, and the same one
+  // `quantiseAnchor` exists to pin. Passing the raw anchor here re-introduced
+  // the sub-slot jitter that function was written to remove, which the
+  // idempotence test caught immediately.
+  const alignedMarkerAnchor = quantiseAnchor(markerAnchor);
+
+  const resolveMarkerTime = (marker: { dateTime?: string; index?: number }):
+    number | null => {
+    if (typeof marker.dateTime === 'string' && marker.dateTime.trim() !== '') {
+      // A marker `dateTime` is a FULL ISO string carrying its own offset
+      // (`2026-11-27T12:23:03.000-00:00`), so it needs no pump clock to
+      // resolve. `parsePumpTime` subtracts `offsetMilliseconds`, and that value
+      // is NaN whenever the payload has no `sMedicalDeviceTime` — which made
+      // the whole branch fall through to the unstable slot path exactly when
+      // the payload was least complete. Use the string directly when there is
+      // no offset to apply.
+      const parsed = Number.isFinite(offsetMilliseconds)
+        ? parsePumpTime(marker.dateTime, '', offsetMilliseconds)
+        : Date.parse(marker.dateTime);
+      if (Number.isFinite(parsed)) {
+        // Allow a couple of minutes of pump/server skew before calling it
+        // future-dated; a genuinely future marker is the defect corrected for
+        // elsewhere and must not be emitted.
+        if (parsed <= markerAnchor + 2 * 60_000) return parsed;
+        logger.warn(
+          'Dropping future-dated marker: ' + marker.dateTime + ' is after the payload anchor',
+        );
+        return null;
+      }
+    }
+    return markerTimeOrOffset(marker, alignedMarkerAnchor);
+  };
+
+  const markers = mapMarkers(data.markers, markerAnchor, resolveMarkerTime);
   if (markers.undatable > 0) {
     // Loud, because the alternative reading is "this fetch had no meals" when
     // in fact it had some that could not be placed in time.

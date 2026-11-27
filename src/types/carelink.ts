@@ -94,7 +94,10 @@ export interface CareLinkData {
    * Both are declared and the transform prefers whichever is present, because
    * a v13 payload has been reported to send the MINUTES pair while the older
    * responses send HOURS. Reading only one would silently write `undefined` for
-   * sensor age.
+   * sensor time remaining.
+   *
+   * ⚠ These are time REMAINING, not elapsed — do not read them as sensor age.
+   * Verified live 2026-11-27; see `sensorHours()` in `transform/index.ts`.
    */
   sensorDurationMinutes?: number;
   timeToNextCalibrationMinutes?: number;
@@ -147,6 +150,29 @@ export interface CareLinkData {
   // units value.
   reservoirLevelPercent?: number;
   activeInsulin?: CareLinkActiveInsulin;
+
+  // ---- pump identity, basal and algorithm settings (780G BLE payload) -------
+  //
+  // All present on a real NGP payload and previously unread. `basal` is the
+  // one that changes a delivered-dose statement: without it there is no record
+  // of what basal rate was running during any given hour.
+  medicalDeviceInformation?: CareLinkMedicalDeviceInformation;
+  basal?: CareLinkActiveBasal;
+  /** Highest temp/programmed basal the pump will accept, U/hr. */
+  maxAutoBasalRate?: number;
+  /** Largest single bolus the pump will accept, U. */
+  maxBolusAmount?: number;
+  /** Mean SG over the pump's own window — mg/dL here even when `bgUnits` says mmol. */
+  averageSG?: number;
+  /** Pump's own percent-in-range figure. */
+  timeInRange?: number;
+  /** Thresholds the pump itself uses, in the SAME unit as `sgs[].sg`. */
+  sgBelowLimit?: number;
+  belowHypoLimit?: number;
+  aboveHyperLimit?: number;
+  pumpBannerState?: unknown[];
+  systemStatusMessage?: string;
+
   lastAlarm?: CareLinkAlarm;
   /**
    * The pump's own event stream: meals, boluses, fingersticks, calibration,
@@ -188,6 +214,81 @@ export interface CareLinkMarker {
   value?: number;
   deliverySuspended?: boolean;
   dateTime?: string;
+
+  // ---- INSULIN bolus detail (measured on a real 780G BLE payload) ----------
+  //
+  // CareLink does NOT put the dose in `amount`/`value` on this route. It
+  // arrives as a pair of split amounts, and READING THE WRONG ONE CHANGES THE
+  // TREATMENT RECORD. Measured 2026-11-27, index 228:
+  //
+  //   programmedFastAmount: 4.4   <- what was dialled in
+  //   deliveredFastAmount:  1.85  <- what actually went in
+  //
+  // The pump had stopped delivering partway (the payload also carries
+  // `BC_SID_ACTIVE_INSULIN_CLEARED_DUE_PUMP_ERROR`); the bolus was NOT cancelled
+  // but 2.55 U never reached him. Recording 4.4 would have overstated IOB by
+  // 2.55 U at a moment he was falling, and understated the shortfall afterwards.
+  // `delivered*` is the only honest number for an IOB/COB calculation.
+  programmedFastAmount?: number;
+  deliveredFastAmount?: number;
+  programmedExtendedAmount?: number;
+  deliveredExtendedAmount?: number;
+  /** `FAST`, `EXTENDED` or `COMBO`. Present on every INSULIN marker. */
+  bolusType?: string;
+  /** `RECOMMENDED` (Bolus Wizard suggested) vs `MANUAL` (user typed it). */
+  activationType?: string;
+  /** Minutes the extended (square-wave) portion was programmed to run. */
+  programmedDuration?: number;
+  /** De-duplicating id for the marker across the rolling re-send. */
+  id?: number;
+  /** Pump's own view: did the bolus run to completion. */
+  completed?: boolean;
+
+  // ---- other marker fields observed on the 780G ---------------------------
+
+  /** TIME_CHANGE only: the wall-clock the pump held before the edit. */
+  previousDateTime?: string;
+  /** AUTO_MODE_STATUS only: SmartGuard's own on/off statement. */
+  autoModeOn?: boolean;
+
+  [key: string]: unknown;
+}
+
+/**
+ * Pump identity, firmware and algorithm settings — ONE nested object on the
+ * BLE route. Observed 2026-11-27 on a real 780G; none of it was being read.
+ *
+ * `softwareRevision` is the load-bearing field: FDA Class 2 recall
+ * **Z-2698-2026** covers 780G software **6.62** paired with the Instinct
+ * sensor, where the pump stops delivering (Error 53 then 23). The delivered
+ * pump reports **6.63V**, i.e. the fix is present. That fact is only knowable
+ * from this object, so not reading it means the recall status of the actual
+ * hardware in use is invisible to the record.
+ */
+export interface CareLinkMedicalDeviceInformation {
+  manufacturer?: string;
+  modelNumber?: string;
+  hardwareRevision?: string;
+  firmwareRevision?: string;
+  softwareRevision?: string;
+  systemId?: string;
+  pnpId?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The pump's currently active basal programme.
+ *
+ * `basalRate` is the programmed rate in U/hr. On a 780G in MANUAL mode this is
+ * what is actually running; while SmartGuard is active the algorithm sets
+ * delivery and this stays the underlying profile, so it must not be presented
+ * as the delivered rate in auto mode — see `pump.autoMode` for which applies.
+ */
+export interface CareLinkActiveBasal {
+  /** Profile name, e.g. `BASAL1`. */
+  activeBasalPattern?: string;
+  /** U/hr. */
+  basalRate?: number;
   [key: string]: unknown;
 }
 

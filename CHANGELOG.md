@@ -14,6 +14,43 @@ record, not reconstructed.
 
 ### Fixed
 
+- **A mmol/L payload that mislabels itself wrote readings 18× too high, and
+  `sensorDuration*` was being read as age when it is time REMAINING.**
+  Four defects, all observed on a live GB 780G + Instinct account on its first
+  day (evidence: `carelink-api-research`
+  `findings-log/2026-11-27-display-message-field-semantics`).
+  - **Unit declarations are now checked against the payload's own values.**
+    A response declaring `"bgUnits":"MMOL_L"` carried `sgs[].sg` 160/148/145 with
+    `sgBelowLimit: 50` and `limits[].lowLimit: 68` — mg/dL magnitudes. Believing
+    the label multiplied a true 8.1 mmol/L into 253. `unitDeclarationIsImplausible()`
+    treats any declared-mmol payload carrying a value, limit or threshold above 40
+    as mg/dL wearing the wrong name, and logs the limit that gave it away.
+    `MMOL_PLAUSIBILITY_CEILING = 40`.
+  - **Marker times come from the pump's own `dateTime`, not a slot index.**
+    Index-derived times drifted 166 s between two polls of an unchanged marker,
+    and because `treatmentId()` hashes the timestamp every poll minted a fresh
+    `_id` — one meal became a new treatment row each cycle. `resolveMarkerTime()`
+    prefers `dateTime` and drops markers dated beyond anchor+2 min.
+  - **A zero-amount bolus is no longer indistinguishable from a missing amount.**
+    `INSULIN(zero amount)` (a prime, a cancelled bolus) and `INSULIN(no amount)`
+    (the amount was not where we looked) carried the same counter string, so an
+    insulin loss could be misread as a prime. `statedZero` separates them.
+  - **`sensorDurationHours` / `sensorDurationMinutes` are time REMAINING, not
+    elapsed.** They were documented as "sensor age". Observed: 21163 minutes
+    (352.7 h) about 7.5 h after insertion, against 360 h of 15-day wear — as
+    remaining that places insertion at the right minute. Rendering it as age puts
+    an expiry alarm on a sensor fitted that morning. Also recorded: the pump omits
+    the pair entirely when it loses the sensor while `sensorState` stays
+    `NO_ERROR_MESSAGE`, so a missing value means the LINK is down.
+- **`pump.reservoir_display_override` is emitted** so the pill reads `256U · 85%`
+  instead of a bare `256U` beside an unlabelled battery percentage — two numbers
+  with nothing to say which is which. The raw `reservoir` and `reservoirPercent`
+  are unchanged for anything computing from them.
+- **`AUTO_MODE_STATUS` becomes a Note instead of being discarded.** SmartGuard
+  on/off is the context that makes a 780G trace readable; it was previously
+  filed as unhandled vocabulary.
+
+
 - **CI verified that things were BUILT, not that they WORKED — four gaps closed.**
   Each one was falsified locally (broken on purpose, observed red) before the
   check was trusted.
