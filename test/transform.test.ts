@@ -310,6 +310,133 @@ describe('transform()', () => {
 
       expect(result.entries[0].sgv).toBe(120);
     });
+
+    // ---- the label can be wrong (measured against a real 780G) -------------
+    //
+    // 2026-11-27: a live BLE payload declared `"bgUnits":"MMOL_L"` while every
+    // value in it was mg/dL. The declaration was trusted, each reading was
+    // multiplied by 18.0182, and Nightscout received 4559 mg/dL for a true 253
+    // — rendering 253 mmol/L. The payload's OWN low limit was the proof of
+    // scale: sgBelowLimit 50 / limits[].lowLimit 68 are mg/dL (68 mg/dL =
+    // 3.78 mmol, the pump's configured low alert), so trusting `bgUnits`
+    // would mean a low alert of 68 mmol/L.
+    describe('implausible mmol/L declaration (real 780G BLE payload)', () => {
+      it('treats declared-MMOL_L values as mg/dL when its own low limit proves they are', () => {
+        const result = transform(data({
+          bgunits: 'MMOL_L',
+          bgUnits: 'MMOL_L',
+          sgBelowLimit: 50,
+          limits: [
+            { index: 0, highLimit: 0, lowLimit: 68, kind: 'Limits', version: 1 },
+          ],
+          sgs: [makeSG(145, 'Nov 27, 2026 15:21:01')],
+        } as never));
+
+        // 145 is mg/dL: 8.1 mmol/L. Converting would have made it 2612.
+        expect(result.entries[0].sgv).toBe(145);
+      });
+
+      it('still converts a genuine mmol/L payload whose low limit is in mmol', () => {
+        const result = transform(data({
+          bgunits: 'MMOL_L',
+          sgBelowLimit: 3.8,
+          limits: [
+            { index: 0, highLimit: 0, lowLimit: 3.8, kind: 'Limits', version: 1 },
+          ],
+          sgs: [makeSG(8.1, 'Nov 27, 2026 15:21:01')],
+        } as never));
+
+        // 8.1 * 18.0182 = 145.9, rounded → 146. Proves the guard is not a
+        // blanket "ignore bgUnits".
+        expect(result.entries[0].sgv).toBe(146);
+      });
+
+      it('ignores a zero highLimit (means "unset") rather than reading it as a value', () => {
+        const result = transform(data({
+          bgunits: 'MMOL_L',
+          sgBelowLimit: 3.8,
+          limits: [
+            { index: 0, highLimit: 0, lowLimit: 3.8, kind: 'Limits', version: 1 },
+          ],
+          sgs: [makeSG(6.5, 'Nov 27, 2026 15:21:01')],
+        } as never));
+
+        // 6.5 mmol → 117 mg/dL. A zero highLimit must not trip the ceiling.
+        expect(result.entries[0].sgv).toBe(117);
+      });
+    });
+  });
+
+  // ---- fields Nightscout's own plugins read -------------------------------
+  describe('mills and pump.iob (Nightscout iob.js contract)', () => {
+    it('emits top-level mills, because iob.js reads it and not pump.iob.timestamp', () => {
+      // lib/plugins/iob.js (v15.0.9) fromDeviceStatus(), pump branch:
+      //   iob: iobPump.iob || iobPump.bolusiob,
+      //   mills: devicestatusEntry.mills
+      // Without `mills` the plugin computes time - undefined = NaN and drops
+      // the IOB value entirely. Measured as iob_u: null on a row that carried
+      // a perfectly good pump.iob.bolusiob.
+      const ds = transform(data()).devicestatus[0];
+      expect(typeof ds.mills).toBe('number');
+      expect(ds.mills).toBe(Date.parse(ds.created_at));
+    });
+
+    it('writes a genuine zero IOB to BOTH iob and bolusiob', () => {
+      // `0 || undefined` is undefined, so a real "0.0 U on board" must not be
+      // left to the `||` fallback in the plugin.
+      const ds = transform(data({
+        activeInsulin: { amount: 0, datetime: 'Oct 17, 2015 09:09:14', version: 1, kind: 'Insulin' },
+      })).devicestatus[0];
+      expect(ds.pump?.iob).toMatchObject({ iob: 0, bolusiob: 0 });
+    });
+
+    it('publishes a non-zero IOB in both keys too', () => {
+      const ds = transform(data({
+        activeInsulin: { amount: 2.75, datetime: 'Oct 17, 2015 09:09:14', version: 1, kind: 'Insulin' },
+      })).devicestatus[0];
+      expect(ds.pump?.iob).toMatchObject({ iob: 2.75, bolusiob: 2.75 });
+    });
+
+    it('omits IOB entirely rather than asserting 0 when the pump did not report it', () => {
+      // A missing activeInsulin is "unknown", and an invented 0 would tell the
+      // reader "nothing on board" on no evidence.
+      const ds = transform(data({ activeInsulin: undefined })).devicestatus[0];
+      expect(ds.pump?.iob['iob']).toBeUndefined();
+      expect(ds.pump?.iob['bolusiob']).toBeUndefined();
+    });
+  });
+
+  describe('reservoir display override (pump pill labelling)', () => {
+    it('names both quantities so 256U and 85% cannot be confused', () => {
+      const ds = transform(data({
+        reservoirRemainingUnits: 256.2,
+        reservoirLevelPercent: 85,
+      })).devicestatus[0];
+      // Nightscout's default is a bare "256U" next to an unlabelled battery
+      // percentage — two numbers, no way to tell which is which.
+      expect(ds.pump?.reservoir_display_override).toBe('256U · 85%');
+      // The raw values still travel for anything that computes from them.
+      expect(ds.pump?.reservoir).toBe(256.2);
+      expect(ds.pump?.reservoirPercent).toBe(85);
+    });
+
+    it('falls back to units alone when the pump reports no percent', () => {
+      const ds = transform(data({
+        reservoirRemainingUnits: 42,
+        reservoirLevelPercent: undefined,
+      })).devicestatus[0];
+      expect(ds.pump?.reservoir_display_override).toBe('42U');
+    });
+
+    it('emits no override when there is no reservoir at all', () => {
+      const ds = transform(data({
+        reservoirRemainingUnits: undefined,
+        reservoirAmount: undefined,
+        reservoirLevelPercent: 50,
+      })).devicestatus[0];
+      // A percent-only payload must not invent a units figure.
+      expect(ds.pump?.reservoir_display_override).toBeUndefined();
+    });
   });
 
   describe('reservoirLevelPercent fallback (#83, memo §P2.1)', () => {

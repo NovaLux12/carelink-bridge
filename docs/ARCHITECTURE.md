@@ -901,7 +901,7 @@ Node 22 and 24 — Node 20 was dropped on 2026-11-13; see
 | `pump-offset.test.ts` | Quarter-hour offset rounding (regression for whole-hour skew) |
 | `refresh-failure.test.ts` | Permanent vs recoverable refresh failure classification |
 | `retry-policy.test.ts` | Status-aware retry: fail-fast, `Retry-After`, jittered backoff |
-| `sensor-duration-units.test.ts` | Both wire spellings for sensor age (`*Hours` legacy vs `*Minutes` v13) converted to Nightscout's hours — a 60× error would be a lie in a medical field |
+| `sensor-duration-units.test.ts` | Both wire spellings for sensor time REMAINING (`*Hours` legacy vs `*Minutes` v13) converted to Nightscout's hours — a 60× error would be a lie in a medical field |
 | `stale-data.test.ts` | Stale-data webhook: fires past the threshold, silent within it, once per stale period, recovers on the next successful fetch; graceful-shutdown SIGTERM flag + second-signal force-exit |
 | `stale-gauge-tracks-watchdog.test.ts` | `carelink_stale` moves on the watchdog path (every fetch failing) as well as the stale-payload path, via the real `decideStale()` |
 | `transform.test.ts` | SGV + devicestatus transform, mmol/L conversion, trend mapping |

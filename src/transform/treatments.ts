@@ -104,6 +104,50 @@ export function markerTime(index: unknown, anchorMs: number): number | null {
 }
 
 /**
+ * A marker's time from slot arithmetic, falling back to `relativeOffset`.
+ *
+ * ⚠ NOT STABLE ACROSS POLLS ON THE 780G — use only when the marker carries no
+ * `dateTime` string.
+ *
+ * Measured 2026-11-27, the same 12 g meal marker fetched ~2 h 40 m apart:
+ *
+ *   capture   index   index-derived time   relativeOffset   dateTime
+ *   15:22      228    10:27:04             -17726           10:27:37.000
+ *   18:04      196    10:29:50             -27493           10:27:37.000
+ *
+ * The index moved 32 slots and the derived time by 166 s, while `dateTime` did
+ * not move at all. `lastMedicalDeviceDataUpdateServerTime` — the anchor used
+ * here — is not the clock the slot index is measured against, so the whole
+ * calculation slides between fetches.
+ *
+ * That mattered: `treatmentId()` hashes the derived time, so a sliding anchor
+ * minted a NEW `_id` for the same physical meal on every poll and Nightscout
+ * appended duplicates instead of updating. Measured consequence — the dashboard
+ * read **COB 15.1 g** because one 12 g meal had become two rows.
+ *
+ * `dateTime` is therefore preferred by the caller (`markerDateTime()` in
+ * transform/index.ts). This function remains for payload shapes with no
+ * `dateTime`, and for state markers (`index: -1`) as a last resort.
+ */
+export function markerTimeOrOffset(
+  marker: CareLinkMarker,
+  anchorMs: number,
+): number | null {
+  const bySlot = markerTime(marker.index, anchorMs);
+  if (bySlot !== null) return bySlot;
+
+  const offset = marker.relativeOffset;
+  if (typeof offset === 'number' && Number.isFinite(offset) && Number.isFinite(anchorMs)) {
+    // relativeOffset is SECONDS before the anchor (negative = in the past).
+    const t = anchorMs + offset * 1000;
+    // A future-dated marker is the defect this bridge already corrects for on
+    // the CGM path; refuse rather than emit one.
+    if (t <= anchorMs) return t;
+  }
+  return null;
+}
+
+/**
  * A stable `_id` so a re-post UPDATES rather than inserts.
  *
  * Nightscout dedups entries on (sysTime, type) but treatments only on `_id`,
@@ -172,6 +216,84 @@ function round(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
 
+/**
+ * Units of insulin actually delivered by one INSULIN marker.
+ *
+ * TWO payload shapes exist and they must not be conflated:
+ *
+ *  - **BLE / NGP (780G, Instinct).** No `amount`/`value` at all. The dose is a
+ *    pair of split amounts: `deliveredFastAmount` + `deliveredExtendedAmount`
+ *    for a `COMBO` bolus. This is the shape the 780G actually sends, and the
+ *    reason every bolus was previously counted as `INSULIN(no amount)` — the
+ *    bridge looked in a field this route never populates.
+ *
+ *  - **Legacy / carepartner.** A single `amount` or `value`.
+ *
+ * **DELIVERED, never PROGRAMMED.** Measured 2026-11-27 on a real 780G: a bolus
+ * was programmed at 4.4 U and delivered 1.85 U, because the pump raised
+ * `BC_SID_ACTIVE_INSULIN_CLEARED_DUE_PUMP_ERROR` mid-bolus. The two differ by
+ * 2.55 U. Writing the programmed figure would overstate IOB at the exact
+ * moment the true figure matters, so `programmed*` is never used as a dose —
+ * it is only ever the fallback when the delivered fields are absent, and then
+ * only because a payload that reports nothing delivered yet is mid-bolus.
+ */
+function bolusDelivered(m: CareLinkMarker): number | undefined {
+  const fast = num(m.deliveredFastAmount);
+  const extended = num(m.deliveredExtendedAmount);
+
+  // BLE shape: at least one delivered field present. `0` is meaningful here —
+  // a pure square-wave bolus has deliveredFastAmount 0 and a real extended
+  // amount, and a cancelled bolus has both zero — so treat presence, not
+  // truthiness.
+  if (m.deliveredFastAmount !== undefined || m.deliveredExtendedAmount !== undefined) {
+    const total = (fast ?? 0) + (extended ?? 0);
+    return total > 0 ? total : undefined;
+  }
+
+  // Mid-bolus on the BLE route: the delivered fields are absent because nothing
+  // has been delivered yet, but the pump HAS been told an amount. Report the
+  // programmed figure rather than dropping a bolus the user actually gave —
+  // the next poll carries the delivered total and overwrites it, because the
+  // treatment `_id` is derived from time and not from the amount.
+  const programmedFast = num(m.programmedFastAmount);
+  const programmedExtended = num(m.programmedExtendedAmount);
+  if (programmedFast !== undefined || programmedExtended !== undefined) {
+    const total = (programmedFast ?? 0) + (programmedExtended ?? 0);
+    return total > 0 ? total : undefined;
+  }
+
+  // Legacy shape. A zero here is "0 U" — a prime or a cancelled bolus — which
+  // is a marker with no dose, not a dose of nothing. Undefined routes it to the
+  // zero-amount counter instead of emitting an empty bolus.
+  const legacy = num(m.amount) ?? num(m.value);
+  return legacy !== undefined && legacy > 0 ? legacy : undefined;
+}
+
+/**
+ * How the event should be labelled from the pump's own bolus metadata.
+ *
+ * Kept in `notes` only — Nightscout's `eventType` vocabulary is closed and
+ * inventing a type would break downstream filters. A stopped or incomplete
+ * bolus is worth being able to find later, because it is the difference
+ * between "I gave 4.4" and "the pump gave me 1.85".
+ */
+function bolusNote(m: CareLinkMarker): string | undefined {
+  const parts: string[] = ['carelink-marker'];
+  if (m.bolusType && m.bolusType !== 'FAST') parts.push(`bolus=${m.bolusType}`);
+  if (m.activationType) parts.push(`activation=${m.activationType}`);
+  if (m.completed === false) parts.push('INCOMPLETE');
+  if (m.programmedDuration) parts.push(`extended=${m.programmedDuration}min`);
+
+  // The shortfall is the clinically load-bearing part. A bolus programmed at
+  // 4.4 U and delivered at 1.85 U explains a rise that no other field records.
+  const programmed = (num(m.programmedFastAmount) ?? 0) + (num(m.programmedExtendedAmount) ?? 0);
+  const delivered = (num(m.deliveredFastAmount) ?? 0) + (num(m.deliveredExtendedAmount) ?? 0);
+  if (programmed > 0 && delivered >= 0 && Math.abs(programmed - delivered) > 0.01) {
+    parts.push(`programmed=${round(programmed)}U delivered=${round(delivered)}U`);
+  }
+  return parts.join(' ');
+}
+
 export interface MarkerMappingResult {
   treatments: Record<string, unknown>[];
   /** Marker types present but deliberately unmapped, with their counts. */
@@ -196,6 +318,17 @@ export interface MarkerMappingResult {
 export function mapMarkers(
   markers: unknown,
   anchorMs: number,
+  /**
+   * Resolves a marker's absolute time. Injected so this module stays free of
+   * `parsePumpTime` and the logger, which live in transform/index.ts.
+   *
+   * Defaults to slot arithmetic for callers (and tests) that have no pump clock
+   * context — but every real caller should pass the `dateTime`-preferring
+   * resolver, because slot arithmetic is unstable on the 780G. See
+   * `markerTimeOrOffset` for the measurements.
+   */
+  resolveTime: (marker: CareLinkMarker) => number | null =
+    (marker) => markerTimeOrOffset(marker, anchorMs),
 ): MarkerMappingResult {
   const out: MarkerMappingResult = {
     treatments: [],
@@ -291,7 +424,7 @@ export function mapMarkers(
     carbs?: number,
     insulin?: number,
   ): Record<string, unknown> | null => {
-    const created = markerTime(m.index, alignedAnchor);
+    const created = resolveTime(m);
     if (created === null) { out.undatable++; return null; }
     const key = `${created}|${eventType}|${carbs ?? ''}|${insulin ?? ''}`;
     const occurrence = seen.get(key) ?? 0;
@@ -333,14 +466,14 @@ export function mapMarkers(
   const takeBolus = (bucket: CareLinkMarker[] | undefined): CareLinkMarker | undefined => {
     if (!bucket || bucket.length === 0) return undefined;
     const i = bucket.findIndex((b) => {
-      const v = num(b.amount) ?? num(b.value);
+      const v = bolusDelivered(b);
       return v !== undefined && v > 0;
     });
     return i < 0 ? undefined : bucket.splice(i, 1)[0];
   };
 
   for (const meal of meals) {
-    const datable = markerTime(meal.index, alignedAnchor) !== null;
+    const datable = resolveTime(meal) !== null;
     // Only consume a bolus for a meal that actually reaches the output.
     // Otherwise an undatable meal swallowed a datable bolus and the insulin
     // vanished with no count anywhere.
@@ -348,7 +481,7 @@ export function mapMarkers(
     // `amount` is carbs on a MEAL and units on an INSULIN; the vendor's own
     // mapping reads them from the same field name (`docs` §P1.1).
     const carbs = num(meal.amount) ?? num(meal.value);
-    const insulin = bolus ? num(bolus.amount) ?? num(bolus.value) : undefined;
+    const insulin = bolus ? bolusDelivered(bolus) : undefined;
 
     if (carbs === undefined && insulin === undefined) {
       // A meal with neither carbs nor a bolus would become a treatment that
@@ -360,8 +493,12 @@ export function mapMarkers(
     if (bolus) {
       // A paired 0 g meal is a bolus with no carbs; writing `carbs: 0` would
       // assert a carb entry that does not exist.
-      emit(meal, 'Meal Bolus', carbs === undefined || carbs === 0 ? undefined : round(carbs),
+      const t = emit(meal, 'Meal Bolus', carbs === undefined || carbs === 0 ? undefined : round(carbs),
            insulin === undefined ? undefined : round(insulin));
+      if (t && bolus) {
+        const note = bolusNote(bolus);
+        if (note && note !== 'carelink-marker') t.notes = note;
+      }
     } else if (carbs !== undefined && carbs > 0) {
       // A meal with no bolus still happened; record the carbs.
       emit(meal, 'Carb Correction', round(carbs));
@@ -375,19 +512,32 @@ export function mapMarkers(
   // the output is deterministic regardless of the wire order.
   for (const idx of [...insulinByIndex.keys()].sort((a, b) => a - b)) {
     for (const bolus of insulinByIndex.get(idx) ?? []) {
-      const raw = bolus.amount ?? bolus.value;
-      const insulin = num(raw);
+      const insulin = bolusDelivered(bolus);
       if (insulin === undefined) {
-        countUnmapped(`INSULIN(${amountProblem(raw) ?? 'no amount'})`);
+        // Name the reason precisely. "no amount" used to cover three different
+        // failures, one of which — a BLE bolus carrying only the split
+        // programmed/delivered amounts — was a total loss of insulin. Now the
+        // counter says which of the three it actually was:
+        //   zero amount  : the pump reported a dose of 0 (prime / cancelled)
+        //   no amount    : no dose field at all, in any vocabulary
+        const statedZero =
+          bolus.deliveredFastAmount === 0 ||
+          bolus.deliveredExtendedAmount === 0 ||
+          bolus.programmedFastAmount !== undefined ||
+          num(bolus.amount) === 0 ||
+          num(bolus.value) === 0;
+        countUnmapped(
+          statedZero
+            ? 'INSULIN(zero amount)'
+            : `INSULIN(${amountProblem(bolus.amount ?? bolus.value) ?? 'no amount'})`,
+        );
         continue;
       }
-      if (insulin === 0) {
-        // "0 U delivered" is not an event Nightscout should hold as a bolus;
-        // it is a marker with no dose. Reported, not emitted.
-        countUnmapped('INSULIN(zero amount)');
-        continue;
+      const t = emit(bolus, 'Correction Bolus', undefined, round(insulin));
+      if (t) {
+        const note = bolusNote(bolus);
+        if (note && note !== 'carelink-marker') t.notes = note;
       }
-      emit(bolus, 'Correction Bolus', undefined, round(insulin));
     }
   }
 
@@ -419,6 +569,55 @@ export function mapMarkers(
     }
     // Declared in the vocabulary but never handled by the vendor either. Count
     // them so their existence is visible rather than silently swallowed.
+    //
+    // ---- the three the 780G actually sends (measured 2026-11-27) ------------
+    //
+    // TIME_CHANGE, AUTO_MODE_STATUS and LOW_GLUCOSE_SUSPENDED all arrive on a
+    // real NGP payload and were previously counted as unmapped and discarded.
+    // Each one is a real event with a permanent meaning, and each explains a
+    // glucose curve that otherwise has no cause recorded:
+    //
+    //  - TIME_CHANGE (the pump's clock was altered). Any refractory window is
+    //    one of these, so a gap in treatment history that is really a clock
+    //    edit looks like missing data forever.
+    //  - AUTO_MODE_STATUS. SmartGuard switching on or off is the single most
+    //    important context for reading a 780G trace, and from Monday it is what
+    //    distinguishes "the algorithm did that" from "I did that".
+    //  - LOW_GLUCOSE_SUSPENDED. Basal interrupted because of a predicted or
+    //    actual low. This is an insulin DELIVERY event: without it, a rise
+    //    after a suspend looks like under-bolusing.
+    //
+    // Written as a `Note` rather than an invented eventType, because
+    // Nightscout's treatment vocabulary is closed and a novel type is dropped
+    // by filters and by Loop's failable parser. A Note is permanent, greppable
+    // and typed as free text by design — which is exactly what these are.
+    if (t === 'TIME_CHANGE') {
+      const prev = m.previousDateTime ? String(m.previousDateTime) : 'unknown';
+      const note = emit(m, 'Note');
+      if (note) note.notes = `pump clock changed (previous reading dated ${prev})`;
+      continue;
+    }
+    if (t === 'AUTO_MODE_STATUS') {
+      const note = emit(m, 'Note');
+      if (note) {
+        note.notes = `SmartGuard auto-mode ${m.autoModeOn === true ? 'ON' : 'OFF'}`;
+      }
+      continue;
+    }
+    if (t === 'LOW_GLUCOSE_SUSPENDED') {
+      // `deliverySuspended` is the pump's own statement. Only the ACTIVE state
+      // is an event worth recording; the "resumed" marker is the absence of
+      // one, and writing both would double the note count without adding a
+      // second fact.
+      if (m.deliverySuspended !== true) {
+        countUnmapped('LOW_GLUCOSE_SUSPENDED(resumed)');
+        continue;
+      }
+      const note = emit(m, 'Note');
+      if (note) note.notes = 'basal suspended — low glucose suspend triggered';
+      continue;
+    }
+
     countUnmapped(t);
   }
 

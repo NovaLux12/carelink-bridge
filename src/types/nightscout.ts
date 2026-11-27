@@ -37,6 +37,22 @@ export interface NightscoutDeviceStatus {
    */
   _id?: string;
   created_at: string;
+  /**
+   * Epoch milliseconds of the same instant as `created_at`.
+   *
+   * NOT decorative: Nightscout's IOB plugin reads this exact field.
+   * `lib/plugins/iob.js` (v15.0.9) fromDeviceStatus(), pump branch:
+   *
+   *     iob: iobPump.iob || iobPump.bolusiob,
+   *     mills: devicestatusEntry.mills
+   *
+   * It takes the timestamp from top-level `mills`, NOT from
+   * `pump.iob.timestamp`. Omit it and the plugin computes `time - undefined`
+   * = NaN and throws away the whole IOB value, however correct the number
+   * inside `pump.iob` is — measured as `iob_u: null` on a devicestatus row
+   * that carried `pump.iob.bolusiob: 0`.
+   */
+  mills?: number;
   device: string;
   uploader: {
     battery: number;
@@ -74,11 +90,70 @@ export interface NightscoutDeviceStatus {
      * §P2.1 — the capacity needed to convert is not in the payload).
      */
     reservoirPercent?: number;
+    /**
+     * Text Nightscout renders IN THE PUMP PILL in place of its own reservoir
+     * string. Read by `lib/plugins/pump.js` updateReservoir():
+     *
+     *     if (result.reservoir_display_override) {
+     *       result.reservoir.display = result.reservoir_display_override;
+     *     }
+     *
+     * Nightscout's default is `value.toPrecision(3) + 'U'` — a bare `256U`,
+     * which next to an unlabelled battery percentage reads as two competing
+     * numbers. We send `256U · 85%` so both quantities are named by their
+     * units and the reader does not have to know the layout to tell which is
+     * which.
+     */
+    reservoir_display_override?: string;
+    /**
+     * Forces the reservoir pill's COLOUR LEVEL independent of the units value.
+     *
+     * Nightscout colours the reservoir from `pump.reservoir` against
+     * `PUMP_WARN_RES`/`PUMP_URGENT_RES` (10/5 U). That is the right rule for a
+     * pump whose reservoir holds 300 U, and it is what we want — so this is
+     * left unset deliberately and the stock thresholds apply. Documented here
+     * because it is the other half of the same override pair and will be wanted
+     * the moment a 300 U reservoir needs different bands from a 180 U one.
+     *
+     * Values: 2 urgent, 1 warn, 0 info, null/absent = let Nightscout decide.
+     */
+    reservoir_level_override?: number;
     iob: {
       timestamp: string;
+      /**
+       * The MM Connect conventional key, and the one Nightscout's plugin tries
+       * FIRST (`iobPump.iob || iobPump.bolusiob`). Written alongside
+       * `bolusiob` so a genuine 0 U does not depend on the `||` fallback —
+       * `0 || undefined` is `undefined`.
+       */
+      iob?: number;
       bolusiob?: number;
     };
     clock: string;
+    /**
+     * Free-form key/value rows rendered inside the pump pill's info panel.
+     *
+     * This is Nightscout's OWN supported extension point, not a hack.
+     * `lib/plugins/pump.js` updateVisualisation() (v15.0.9) does:
+     *
+     *     , extended: pump.extended || null
+     *     ...
+     *     if (result.extended) {
+     *       info.push({label: '------------', value: ''});
+     *       Object.entries(result.extended).forEach(([key, value]) => {
+     *          info.push({ label: key, value: value });
+     *       });
+     *     }
+     *
+     * So anything here appears as a labelled row when the pump pill is opened —
+     * the only way to surface 780G-specific facts in the UI without patching
+     * Nightscout itself. Used for the fields Nightscout has no native slot for:
+     * bolus delivery shortfall, SmartGuard state, firmware.
+     *
+     * Values must be strings or numbers; a nested object renders as
+     * `[object Object]`.
+     */
+    extended?: Record<string, string | number>;
     /**
      * Delivery status, as Nightscout's pump plugin actually reads it.
      *
