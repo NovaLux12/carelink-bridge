@@ -14,6 +14,26 @@ record, not reconstructed.
 
 ### Fixed
 
+- **Readings CareLink backfills were dropped permanently; the recency filter now
+  forwards by a bounded window instead of a high-water mark.** `display/message`
+  returns a fixed 288-slot (~24 h) ring buffer and fills empty slots
+  retrospectively — measured on a live GB 780G + Instinct account on 2026-11-28, a
+  slot absent from the 10:25 poll was present at 10:36. The filter forwarded an
+  item only when `t > mark`, which cannot express "already sent", so any reading
+  published behind an already-forwarded one was discarded for ever. Measured
+  cost over 24 h: **8 of 235 readings (3.4%) never reached Nightscout**, two of
+  them at or below the 4.0 target — with 0 fetch failures and 0
+  restarts, so nothing else was reporting a problem. The same defect explains
+  why backfill appeared to work sometimes: a late arrival passed whenever it
+  happened to still be newer than the mark. `makeRecencyFilter()` now keeps the
+  set of forwarded timestamps and forwards anything not in it that is newer than
+  `now - DEFAULT_FORWARD_WINDOW_MS` (6 h); eviction and the forwardable test use
+  the same bound, so eviction cannot re-post a window. The stall reset now
+  re-anchors that floor, without which a backwards clock jump of more than the
+  window would suppress the feed for ever — the first implementation of this was
+  a no-op and the DST test caught it. A one-hour DST fall-back no longer needs
+  the reset at all. Design: [ADR 0012](./docs/adr/0012-forward-window-not-high-water-mark.md).
+
 - **A mmol/L payload that mislabels itself wrote readings 18× too high, and
   `sensorDuration*` was being read as age when it is time REMAINING.**
   Four defects, all observed on a live GB 780G + Instinct account on its first

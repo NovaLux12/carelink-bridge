@@ -82,6 +82,43 @@ export const MAX_FUTURE_SKEW_MS = 26 * HOUR_MS;
  */
 export const DEFAULT_STALL_RESET_MS = 30 * 60_000;
 
+/**
+ * How far back a timestamp may be and still be forwarded.
+ *
+ * THE DEFECT THIS BOUND FIXES. Before this, the filter kept a single
+ * high-water mark and forwarded only `t > mark`. That cannot express "already
+ * forwarded", so any reading that the source publishes LATE — after something
+ * newer has already gone through — was discarded for ever. CareLink does
+ * exactly that: `display/message` returns a fixed 288-slot (~24 h) ring buffer
+ * and fills empty slots retrospectively. Measured on a live account
+ * (2026-11-28): a slot absent from one poll was present 11 minutes later, and
+ * 8 of 235 readings across 24 h never reached Nightscout, two of them below the
+ * low target — with every fetch reporting success and zero restarts.
+ *
+ * The mark was also the reason a late arrival sometimes *did* appear: if the
+ * late reading happened to still be newer than the mark it passed, which made
+ * backfill look like a feature that half worked. It was never deliberate.
+ *
+ * So the filter now holds the timestamps it has forwarded, and forwards
+ * anything not in that set which is newer than `now - lastAgedOutMs`. The
+ * window is bounded deliberately: an unbounded set is a memory leak over a
+ * 24/7 process, and Nightscout's own dedupe is on `(sysTime, type)` so the cost
+ * of re-sending is an idempotent upsert — but an entry evicted from the set
+ * MUST also become forwardable again, or the two halves disagree and a poll
+ * after eviction re-posts a whole window. Both sides use this one constant.
+ *
+ * 6 h, not the ring buffer's 24 h. A marker-dated entry (`dateTime`, a full ISO
+ * string) does not drift, but the slot-arithmetic fallback can land an entry a
+ * slot or two off its neighbours, and `transform()` applies `SGV_LIMIT` after
+ * the filter — so a window wider than the payload's own extent buys nothing.
+ * Six hours is 72 consecutive 5-minute slots: far more than any observed
+ * lateness, and small enough that the set stays in the hundreds of entries.
+ */
+export const DEFAULT_FORWARD_WINDOW_MS = 6 * HOUR_MS;
+
+/** The constant to document; kept as an alias so the window reads naturally. */
+export const BACKFILL_WINDOW_MS = DEFAULT_FORWARD_WINDOW_MS;
+
 export interface RecencyFilterOptions {
   /**
    * Clock, injectable so the stall reset can be tested without waiting 30 min.
@@ -90,8 +127,14 @@ export interface RecencyFilterOptions {
   readonly now?: () => number;
   /** Override MAX_FUTURE_SKEW_MS. Tests only. */
   readonly maxFutureMs?: number;
-  /** Override DEFAULT_STALL_RESET_MS. Tests only. */
+  /** Override `DEFAULT_STALL_RESET_MS`. Tests only. */
   readonly stallResetMs?: number;
+  /**
+   * Override `DEFAULT_FORWARD_WINDOW_MS` — how far back a timestamp may be and
+   * still be forwarded. Tests only; a real deployment should not shorten it,
+   * because that is the range in which a late reading is recovered.
+   */
+  readonly forwardWindowMs?: number;
   /** Names the feed in log lines, e.g. "entries" / "devicestatus". */
   readonly label?: string;
 }
@@ -107,31 +150,67 @@ export function makeRecencyFilter<T>(
   const now = options.now ?? Date.now;
   const maxFutureMs = options.maxFutureMs ?? MAX_FUTURE_SKEW_MS;
   const stallResetMs = options.stallResetMs ?? DEFAULT_STALL_RESET_MS;
+  const forwardWindowMs = options.forwardWindowMs ?? DEFAULT_FORWARD_WINDOW_MS;
   const label = options.label ?? 'recency-filter';
 
-  let lastTime = 0;
+  /**
+   * Timestamps already forwarded, and so to be suppressed while they remain in
+   * the window. Replaces the single high-water mark, which could not tell
+   * "already sent" from "older than something I sent" and therefore dropped
+   * every late arrival for ever.
+   *
+   * Bounded by `forwardWindowMs` on BOTH sides: an entry is pruned once it is
+   * older than `now - forwardWindowMs`, and the forwardable test is the same
+   * bound. Keeping those two uses of one constant is what stops the pair
+   * disagreeing — if eviction were tighter than the test, the first poll after
+   * eviction would re-post a window, every poll, for ever.
+   */
+  const forwarded = new Set<number>();
+  /**
+   * A floor the stall reset (protection 3) has moved back to the source's own
+   * timestamps, or -Infinity when normal windowing applies.
+   *
+   * `floor` is derived from `now`, so a backwards clock jump would otherwise
+   * suppress the feed for ever: every timestamp the source publishes is behind
+   * `now - forwardWindowMs` and there is nothing left to re-anchor to. The reset
+   * sets this to the source's newest timestamp, and because the effective floor
+   * is the MINIMUM of the two, it decays on its own — as wall-clock time
+   * advances, `now - forwardWindowMs` overtakes it and normal windowing resumes
+   * without a second decision.
+   *
+   * Starts at +Infinity so that until a reset happens `Math.min` selects the
+   * ordinary window. A `-Infinity` here would make every timestamp forwardable
+   * on the first poll, which is the opposite of bounding anything.
+   */
+  let resyncedFloor = Infinity;
   /**
    * Timestamps in (now, now + maxFutureMs] that have ALREADY been forwarded.
    *
-   * Needed because the mark is capped at `now` (protection 2): without this, an
-   * accepted future-dated reading stays "newer than the mark" on every poll and
-   * would be re-posted indefinitely. Keeping the cap and this small set gives
-   * both properties — future data is sent once, and the suppression horizon can
+   * Needed because the forwardable horizon is capped at `now` (protection 2):
+   * without this, an accepted future-dated reading stays forwardable on every
+   * poll and would be re-posted indefinitely. Keeping the cap and this small
+   * set gives both properties — future data is sent once, and the horizon can
    * never run ahead of real time. Pruned each poll as time passes the entry, so
    * it holds at most one rolling window of skewed timestamps.
    */
   const forwardedFuture = new Set<number>();
   /**
-   * When the current run of "items returned but nothing newer than the mark"
-   * started, or null when the mark is being advanced normally. Deliberately
-   * NOT persisted: a restart rebuilds it from the first poll, and a fresh
-   * process starts with lastTime = 0, which cannot be stuck above the source.
+   * When the current run of "items returned but nothing newer than anything
+   * already forwarded" started, or null when normal progress is being made.
+   * Deliberately NOT persisted: a restart rebuilds it from the first poll, and
+   * a fresh process starts with an empty set, which cannot be stuck above the
+   * source.
    */
   let stalledSince: number | null = null;
 
   return function recencyFilter(items: T[]): T[] {
     const nowMs = now();
     const horizon = nowMs + maxFutureMs;
+    // Oldest timestamp still worth forwarding. A late arrival inside this
+    // window is genuine data the source has only just published; outside it,
+    // the source is presumed to have moved on and the entry is debris. The
+    // stall reset can lower it (see `resyncedFloor`).
+    const floor = Math.min(nowMs - forwardWindowMs, resyncedFloor);
 
     const out: T[] = [];
     let newestAccepted = -Infinity;
@@ -139,9 +218,16 @@ export function makeRecencyFilter<T>(
     let newestRejected = -Infinity;
     let futureRejected = 0;
     let invalid = 0;
+    let tooOld = 0;
 
+    // Prune anything that has aged out of the window, on both sets, so memory
+    // is bounded over a 24/7 process. `floor` is the same bound the forwardable
+    // test below uses — see the note on `forwarded`.
+    for (const t of forwarded) {
+      if (t < floor) forwarded.delete(t);
+    }
     // Entries in the future window that real time has now passed are no longer
-    // "future" — the ordinary mark covers them from here on.
+    // "future" — the ordinary set covers them from here on.
     for (const t of forwardedFuture) {
       if (t <= nowMs) forwardedFuture.delete(t);
     }
@@ -165,17 +251,24 @@ export function makeRecencyFilter<T>(
       if (t > nowMs) {
         // Inside the plausibility bound but ahead of real time. Forward it —
         // it may be genuine data from a mis-set pump clock — but suppress a
-        // repeat of the same instant, which is what keeps the mark's cap from
-        // turning one skewed reading into a permanent re-post.
+        // repeat of the same instant, which is what keeps the horizon's cap
+        // from turning one skewed reading into a permanent re-post.
         if (forwardedFuture.has(t)) continue;
         forwardedFuture.add(t);
         out.push(item);
         continue;
       }
-      if (t > lastTime) {
-        out.push(item);
-        if (t > newestAccepted) newestAccepted = t;
+      // The fix: "not already forwarded and still inside the window", rather
+      // than "newer than the newest thing I ever sent". A slot the source
+      // backfills behind newer readings now passes on the poll that carries it.
+      if (t < floor) {
+        tooOld++;
+        continue;
       }
+      if (forwarded.has(t)) continue;
+      forwarded.add(t);
+      out.push(item);
+      if (t > newestAccepted) newestAccepted = t;
     }
 
     if (futureRejected > 0) {
@@ -201,20 +294,22 @@ export function makeRecencyFilter<T>(
 
     if (out.length > 0) {
       stalledSince = null;
-      // Protection (2): the mark may not advance past real time. A future-dated
-      // item is forwarded above, but it cannot make the horizon outrun the
-      // clock; a genuine past-dated reading therefore passes on the next poll
-      // (or as soon as the readings' own timestamps reach the cap), instead of
-      // being suppressed for as long as the skew lasted.
-      lastTime = Math.max(lastTime, Math.min(newestAccepted, nowMs));
+      // Protection (2): the forwardable horizon may not run past real time. A
+      // future-dated item is forwarded above, but it cannot move the horizon;
+      // a genuine past-dated reading therefore passes as soon as the readings'
+      // own timestamps reach the cap, instead of being suppressed for as long
+      // as the skew lasted.
       return out;
     }
 
-    // Nothing forwarded. That is normal when the poll is empty or every item is
-    // an exact duplicate; only "items arrived, all strictly behind the mark"
-    // is evidence about the mark.
+    // Nothing forwarded. That is normal when the poll is empty or every item
+    // has already been sent; only "items arrived, and every one of them is
+    // behind the window" is evidence that the window — not the source — is
+    // wrong.
     if (items.length === 0 || !Number.isFinite(newestSeen)) return out;
-    if (newestSeen >= lastTime) return out; // equality = exact duplicates
+    // Anything inside the window was either forwarded above or already known,
+    // so there is nothing stale to recover from.
+    if (newestSeen >= floor) return out;
 
     if (stalledSince === null) {
       stalledSince = nowMs;
@@ -224,7 +319,7 @@ export function makeRecencyFilter<T>(
 
     // Protection (3): resynchronise to what the source is publishing. Without
     // this, a backwards clock jump (DST fall-back, or an operator correcting a
-    // fast pump) leaves the mark in the future of the data and suppresses the
+    // fast pump) leaves every timestamp behind the window and suppresses the
     // feed until the clock catches up — silently, and possibly for days.
     //
     // Note the timestamps themselves are still the source's, and a backwards
@@ -232,18 +327,22 @@ export function makeRecencyFilter<T>(
     // upserts on (sysTime, type), so the stored value is corrected rather than
     // duplicated. Timestamp correctness is the transform's job, not this
     // filter's — here we only stop losing data.
-    const previousMark = lastTime;
+    const previousFloor = iso(floor);
     const stalledForMs = nowMs - stalledSince;
-    lastTime = Math.max(0, Math.min(newestSeen, nowMs));
     stalledSince = null;
+    // Re-anchor to the source. Without this the recovery would be a no-op: the
+    // floor is `now - forwardWindowMs`, and after a backwards jump every
+    // timestamp the source publishes is behind it.
+    resyncedFloor = Math.min(newestSeen, nowMs);
 
     logger.warn(
-      'No ' + label + ' item newer than the high-water mark for ' +
-        Math.round(stalledForMs / 1000) + 's — resynchronising the mark to the source',
+      'No ' + label + ' item inside the ' + Math.round(forwardWindowMs / HOUR_MS) +
+        'h forward window for ' + Math.round(stalledForMs / 1000) +
+        's — resynchronising to the source',
       {
         label,
         stalledForSeconds: Math.round(stalledForMs / 1000),
-        previousMark: iso(previousMark),
+        previousFloor,
         sourceNewest: iso(newestSeen),
         now: iso(nowMs),
       },
@@ -253,6 +352,16 @@ export function makeRecencyFilter<T>(
     for (const item of items) {
       const t = timeFn(item);
       if (!Number.isFinite(t) || t > horizon) continue;
+      // Skip what is already known so a resync does not re-post the window on
+      // the poll after this one, then RECORD what is forwarded — without the
+      // record, the resumed item looks new again on every subsequent poll.
+      if (t > nowMs) {
+        if (forwardedFuture.has(t)) continue;
+        forwardedFuture.add(t);
+      } else {
+        if (forwarded.has(t)) continue;
+        forwarded.add(t);
+      }
       resumed.push(item);
     }
     return resumed;

@@ -157,15 +157,33 @@ sequenceDiagram
 
 `src/filter.ts` exports `makeRecencyFilter<T>(timeFn, options?)` — the
 generic parameter is inferred from the accessor you pass — which returns
-a function that takes an array of items and returns only items
-whose key (date or timestamp) is newer than the highest key
-previously seen. `options` carries `label` (for log lines),
-`now`, `maxFutureMs` (future-dated readings are forwarded once, not
-indefinitely) and `stallResetMs`. This is in-memory state — it does not persist
-across restarts. On restart, the bridge re-uploads the last 24 SGVs
-(`CARELINK_SGV_LIMIT=24` default), and Nightscout de-duplicates by
-date+sgv. So a restart costs at most one duplicate upload, not
-duplicate entries in Nightscout.
+a function that takes an array of items and returns only items that
+have not already been forwarded and are still inside a bounded window
+(`DEFAULT_FORWARD_WINDOW_MS`, 6 h). `options` carries `label` (for log
+lines), `now`, `maxFutureMs` (future-dated readings are forwarded once,
+not indefinitely), `stallResetMs` and `forwardWindowMs`. This is
+in-memory state — it does not persist across restarts.
+
+**It is a set, not a high-water mark, and that distinction is the fix.**
+CareLink fills empty ring-buffer slots retrospectively, so a reading can
+arrive *behind* one already forwarded. A mark (`t > newest`) cannot
+express "already sent" and discarded those for ever — measured at 8 of
+235 readings lost in 24 h (ADR 0012). The set admits them, and the
+window is what stops it growing without bound. Eviction and the
+forwardable test must use the **same** bound; if eviction were tighter,
+the first poll after eviction would re-post a window on every poll.
+
+The consequence for restarts is unchanged in practice: on restart the
+set is empty, so the bridge re-uploads the last `CARELINK_SGV_LIMIT`
+(24) SGVs and Nightscout de-duplicates by `date+sgv`. So a restart costs
+at most one duplicate upload, not duplicate entries in Nightscout.
+
+**The filter holds one assumption it did not hold before:** `timeFn`
+must return a **stable** value for the same real-world item across
+polls. A timestamp recomputed from a drifting anchor would give one
+reading a new identity every poll and re-send it. That is already
+mandatory for markers (dated from `dateTime`, never slot arithmetic) for
+the same reason, and the filter now shares it.
 
 ### The CareLink fetch branches
 
